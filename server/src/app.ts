@@ -4,11 +4,14 @@ import { pool } from "./config/db.js";
 import categoryRoutes from "./routes/categoryRoutes.js";
 import productRoutes from "./routes/productRoute.js";
 import supplierRoutes from "./routes/supplierRoutes.js"
+import cors from "cors"
 console.log(categoryRoutes);
 
 dotenv.config();
 
 const app = express();
+
+app.use(cors())
 app.use(express.json());
 
 app.get("/", (req, res) => {

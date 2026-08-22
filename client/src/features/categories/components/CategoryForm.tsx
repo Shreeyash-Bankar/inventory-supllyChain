@@ -1,28 +1,95 @@
-import React from "react";
+
+import { useState } from "react";
+import axios from "axios";
+
 
 const CategoryForm = () => {
+
+  const [category, setCategory] = useState("")
+  const [loading , setLoading] = useState(false)
+  console.log(category)
+
+  const handleSubmit = async(e:React.FormEvent<HTMLFormElement>) => {
+      e.preventDefault();
+      if(!category.trim()){
+        return
+      }
+    try{
+    setLoading(true)
+    const response = await axios.post(
+      "http://localhost:5000/categories", 
+      {
+        name: category
+      }
+    )
+
+    console.log("category created:", response.data)
+
+    setCategory("")
+
+    }catch(error){
+      console.error("Error creating category :", error)
+    }finally{
+      setLoading(false)
+    }
+  }
+
   return (
-    <div className="bg-amber-200 max-w-100 ">
-      <div>
-        <div>
-          <p>Create New Category</p>
-        </div>
-        <div className=" w-full mb-4">
-          <div>
-            <input type="text" className="bg-white rounded-md mb-4 w-full px-6 py-1" />
+    <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-slate-950 via-slate-900 to-indigo-950 px-4">
+      
+      {/* Card */}
+      <div className="w-full max-w-md animate-[fadeIn_0.5s_ease-out] rounded-2xl border border-white/10 bg-white/10 p-1 shadow-2xl shadow-indigo-500/10 backdrop-blur-xl">
+        
+        <div className="rounded-xl bg-slate-900/80 px-6 py-7">
+          
+          {/* Header */}
+          <div className="mb-7">
+            <p className="mb-1 text-3xl font-bold tracking-tight text-white">
+              Create Category
+            </p>
+
+            <p className="text-sm text-slate-400">
+              Add a new category to organize your content.
+            </p>
           </div>
-          <div className="flex gap-3 mb-4">
-            <div>
-              <button className="bg-green-500 px-8 py-2 rounded-md mb-4">
-                Save
-              </button>
+
+          {/* Form */}
+          <form onSubmit={handleSubmit}>
+            <div className="mb-6">
+              <label
+                htmlFor="category"
+                className="mb-2 block text-sm font-medium text-slate-300"
+              >
+                Category name
+              </label>
+
+              <input
+              value={category}
+                id="category"
+                type="text"
+                placeholder="e.g. Technology"
+                className="w-full rounded-xl border border-slate-700 bg-slate-800/70 px-4 py-3 text-white outline-none transition-all duration-300 placeholder:text-slate-500 focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/20"
+                onChange={(e) => setCategory(e.target.value)}
+              />
             </div>
-            <div>
-              <button className="bg-red-500 px-8 py-2 rounded-md">
+
+            {/* Buttons */}
+            <div className="flex gap-3">
+              <button
+                type="button"
+                className="flex-1 rounded-xl border border-slate-700 bg-slate-800 px-4 py-3 font-medium text-slate-300 transition-all duration-300 hover:-translate-y-0.5 hover:bg-slate-700 hover:text-white active:translate-y-0"
+              >
                 Cancel
               </button>
+
+              <button
+                type="submit"
+                className="flex-1 rounded-xl bg-indigo-600 px-4 py-3 font-medium text-white shadow-lg shadow-indigo-600/20 transition-all duration-300 hover:-translate-y-0.5 hover:bg-indigo-500 hover:shadow-indigo-500/40 active:translate-y-0"
+              >
+                Save Category
+              </button>
             </div>
-          </div>
+          </form>
         </div>
       </div>
     </div>
