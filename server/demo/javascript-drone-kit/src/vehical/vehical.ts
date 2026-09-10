@@ -1,7 +1,11 @@
 import { EventEmitter } from "node:events";
 import { MavlinkEngine } from "../mavlink/MavlinkEngine";
-import { COPTER_MODES } from "./mode";
+
 import { Telemetry } from "./telemetry.js";
+// import { CommandManager } from "../command/commandManager";
+import { CommandManager } from "../command/commandManager.js";
+import { Messages } from "./messages";
+import { COPTER_MODES, getCopterModeNumber } from "./mode.js";
 
 export interface MavlinkMessage {
   name: string;
@@ -15,6 +19,10 @@ export class Vehicle extends EventEmitter {
   private systemId: number | null = null;
   private componentId: number | null = null;
 
+  public readonly messages = new Messages();
+
+  private readonly commands: CommandManager;
+
   private connected = false;
   private armed = false;
 
@@ -27,6 +35,8 @@ export class Vehicle extends EventEmitter {
 
   constructor(private readonly mavlink: MavlinkEngine) {
     super();
+
+    this.commands = new CommandManager(mavlink);
 
     console.log("VEHICLE CREATED");
 
@@ -54,6 +64,8 @@ export class Vehicle extends EventEmitter {
       return;
     }
 
+    this.messages.update(packet);
+
     /*
      * HEARTBEAT
      *
@@ -80,6 +92,7 @@ export class Vehicle extends EventEmitter {
      *
      * MAV_MODE_FLAG_SAFETY_ARMED = 128
      */
+
     const baseMode = packet.data.baseMode;
 
     this.armed = (baseMode & 128) !== 0;
@@ -90,6 +103,7 @@ export class Vehicle extends EventEmitter {
      * We won't translate it into a readable
      * ArduPilot mode yet.
      */
+
     const customMode = Number(packet.data.customMode);
 
     this.mode = COPTER_MODES[customMode] ?? `UNKNOWN(${customMode})`;
@@ -153,6 +167,36 @@ export class Vehicle extends EventEmitter {
 
   get lastHeartbeatTime(): number {
     return this.lastHeartbeat;
+  }
+
+  async arm(): Promise<void> {
+    if (this.systemId === null || this.componentId === null) {
+      throw new Error("Vehicle is not connected");
+    }
+
+    await this.commands.arm(this.systemId, this.componentId);
+  }
+
+  async disarm(): Promise<void> {
+    if (this.systemId === null || this.componentId === null) {
+      throw new Error("Vehicle is not connected");
+    }
+
+    await this.commands.disarm(this.systemId, this.componentId);
+  }
+
+  getMode(): string | null {
+    return this.mode;
+  }
+
+  async setMode(mode: string): Promise<void> {
+    if (this.systemId === null || this.componentId === null) {
+      throw new Error("Vehicle is not connected");
+    }
+
+    const customMode = getCopterModeNumber(mode);
+
+    await this.commands.setMode(this.systemId, this.componentId, customMode);
   }
 
   destroy(): void {
