@@ -9,7 +9,8 @@ async function main() {
   // 1. Create UDP connection
   // --------------------------------
 
-  const connection = new UdpConnection("127.0.0.1", 14552);
+  // const connection = new UdpConnection("127.0.0.1", 14552);
+  const connection = new UdpConnection("127.0.0.1", 14553);
 
   // --------------------------------
   // 2. Create MAVLink engine
