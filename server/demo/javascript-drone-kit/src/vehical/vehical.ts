@@ -2,8 +2,7 @@ import { EventEmitter } from "node:events";
 import { MavlinkEngine } from "../mavlink/MavlinkEngine";
 
 import { Telemetry } from "./telemetry.js";
-// import { CommandManager } from "../command/commandManager";
-import { CommandManager } from "../command/commandManager.js";
+import { CommandManager } from "../command/commandManager";
 import { Messages } from "./messages";
 import { COPTER_MODES, getCopterModeNumber } from "./mode.js";
 
@@ -183,6 +182,32 @@ export class Vehicle extends EventEmitter {
     }
 
     await this.commands.disarm(this.systemId, this.componentId);
+  }
+
+  async navigateToWaypoint(
+    lat: number,
+    lon: number,
+    alt: number,
+  ): Promise<void> {
+    if (this.systemId === null || this.componentId === null) {
+      throw new Error("Vehicle is not connected");
+    }
+
+    await this.commands.setGuidedPosition(
+      this.systemId,
+      this.componentId,
+      lat,
+      lon,
+      alt,
+    );
+  }
+
+  async takeOff(altitude: number) {
+    if (this.systemId === null || this.componentId === null) {
+      throw new Error("Vehical is not connected");
+    }
+
+    await this.commands.takeOff(this.systemId, this.componentId, altitude);
   }
 
   getMode(): string | null {
