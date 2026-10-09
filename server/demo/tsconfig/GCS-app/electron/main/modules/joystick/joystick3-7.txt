@@ -1,0 +1,181 @@
+ [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1]  Current Active Button Assignments:
+[1]    • [Button 0] ──► Assigned to Function: ARM_TOGGLE
+[1]    • [Button 1] ──► Assigned to Function: MODE_ALTHOLD
+[1]    • [Button 2] ──► Assigned to Function: MODE_LOITER
+[1]    • [Button 3] ──► Assigned to Function: MODE_ALTHOLD
+[1]    • [Button 4] ──► Assigned to Function: MODE_STABILIZE
+[1]    • [Button 5] ──► Assigned to Function: MODE_GUIDED
+[1]    • [Button 6] ──► Assigned to Function: MODE_LAND
+[1]  Current Active Axis Assignments:
+[1]    • [Axis 0] ──► Assigned to Function: ROLL
+[1]    • [Axis 1] ──► Assigned to Function: PITCH
+[1]    • [Axis 2] ──► Assigned to Function: YAW
+[1]    • [Axis 3] ──► Assigned to Function: THROTTLE
+[1] [BACKEND-JOYSTICK] Configuration merged. Active mapping shape: {
+[1]   axes: { '0': 'roll', '1': 'pitch', '2': 'yaw', '3': 'throttle' },
+[1]   buttons: {
+[1]     '0': 'ARM_TOGGLE',
+[1]     '1': 'MODE_ALTHOLD',
+[1]     '2': 'MODE_LOITER',
+[1]     '3': 'MODE_ALTHOLD',
+[1]     '4': 'MODE_STABILIZE',
+[1]     '5': 'MODE_GUIDED',
+[1]     '6': 'MODE_LAND'
+[1]   }
+[1] } 
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [COMMAND_SERVICE INTERCEPT]  CH1(Roll): 1500μs | CH2(Pitch): 1500μs | CH3(Throt): 1502μs | CH4(Yaw): 1500μs
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [COMMAND_SERVICE INTERCEPT]  CH1(Roll): 1500μs | CH2(Pitch): 1500μs | CH3(Throt): 1502μs | CH4(Yaw): 1500μs
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] false
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [COMMAND_SERVICE INTERCEPT]  CH1(Roll): 1500μs | CH2(Pitch): 1500μs | CH3(Throt): 1502μs | CH4(Yaw): 1500μs
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [COMMAND_SERVICE INTERCEPT]  CH1(Roll): 1500μs | CH2(Pitch): 1500μs | CH3(Throt): 1502μs | CH4(Yaw): 1500μs
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] false
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [COMMAND_SERVICE INTERCEPT]  CH1(Roll): 1500μs | CH2(Pitch): 1500μs | CH3(Throt): 1502μs | CH4(Yaw): 1500μs
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] false
+[1] [COMMAND_SERVICE INTERCEPT]  CH1(Roll): 1500μs | CH2(Pitch): 1500μs | CH3(Throt): 1502μs | CH4(Yaw): 1500μs
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [COMMAND_SERVICE INTERCEPT]  CH1(Roll): 1500μs | CH2(Pitch): 1500μs | CH3(Throt): 1502μs | CH4(Yaw): 1500μs
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] false
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [COMMAND_SERVICE INTERCEPT]  CH1(Roll): 1500μs | CH2(Pitch): 1500μs | CH3(Throt): 1502μs | CH4(Yaw): 1500μs
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [COMMAND_SERVICE INTERCEPT]  CH1(Roll): 1500μs | CH2(Pitch): 1500μs | CH3(Throt): 1502μs | CH4(Yaw): 1500μs
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] false
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [COMMAND_SERVICE INTERCEPT]  CH1(Roll): 1500μs | CH2(Pitch): 1500μs | CH3(Throt): 1502μs | CH4(Yaw): 1500μs
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [COMMAND_SERVICE INTERCEPT]  CH1(Roll): 1500μs | CH2(Pitch): 1500μs | CH3(Throt): 1502μs | CH4(Yaw): 1500μs
+[1] Triggering custom action map key: MODE_ALTHOLD
+[1] Executing: AltHold
+[1] [INFO] [MAVLINK_TX] Sending CMD_LONG (176). Params: P1=0, P2=0
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] this message is from command_ack CommandAck {
+[1]   command: 176,
+[1]   result: 2,
+[1]   progress: 0,
+[1]   resultParam2: 0,
+[1]   targetSystem: 255,
+[1]   targetComponent: 190
+[1] }
+[1]  [DRONE ACK RESULT] Received response for command 176. Result code is: 2 CommandAck {
+[1]   command: 176,
+[1]   result: 2,
+[1]   progress: 0,
+[1]   resultParam2: 0,
+[1]   targetSystem: 255,
+[1]   targetComponent: 190
+[1] }
+[1]  COMPASSMOT ACK command=176 result=2
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1] [BACKEND-JOYSTICK] Axes Data: [0.00, -0.00, 0.00, -0.00] | 🔴 Buttons Data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]

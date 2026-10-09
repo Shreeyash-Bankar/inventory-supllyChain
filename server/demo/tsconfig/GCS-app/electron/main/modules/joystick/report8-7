@@ -1,0 +1,18 @@
+completed all the 3 calibrations
+implemented attitude guage
+implemented compass guage at the outer part of attitude guage
+implemented message box to show the messages arriving from the drone
+implemented drone information box
+implemented the select and see properties of the drone
+created cards that show battery , attitude, location
+the dashboard show all the information required
+drone parameters are being received and updated
+implemented card to show all the information provided by autopilot
+implemented joystick control and custom mapping to the joystick
+
+pending work
+the joystick axes are sometimes sending the input to the drone sometimes not
+the messages are arriving but sometimes they are not arriving
+the joystick default maping need to get changed
+need to implement the arm and setMode in the UI
+the joystick serive is only working when started the application but not the first connection
