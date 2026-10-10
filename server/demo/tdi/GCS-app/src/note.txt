@@ -1,0 +1,24 @@
+telemetry Fiels: 
+Attitude
+RawImu
+ScaledPressure
+ParamValue
+Vibration
+GlobalPositionInt
+SysStatus
+PowerStatus
+MemInfo
+NavControllerOutput
+MissionCurrent
+ScaledImu2
+Ahrs2
+SystemTime
+VfrHud
+TerrainReport
+Ahrs
+EkfStatusReport
+RcChannels
+GpsRawInt
+TimeSync
+ScaledPressure2
+ServoOutputRaw

@@ -1,0 +1,1212 @@
+
+No file chosenNo file chosenNo file chosen
+
+Chat with ChatGPT
+Ask anything
+
+
+
+Log in
+Sign up for free
+You said:
+
+export class JoystickService {
+  // Define a static default configuration so it's always accessible
+  // static DEFAULT_CONFIG = {
+  //   axes: { 0: "roll", 1: "pitch", 2: "yaw", 3: "throttle" },
+  //   buttons: {
+  //     0: "ARM_TOGGLE",
+  //     1: "MODE_RTL",
+  //     2: "MODE_LOITER",
+  //     3: "MODE_ALTHOLD",
+  //     4: "MODE_STABILIZE",
+  //     5: "MODE_GUIDED",
+  //     6: "MODE_LAND",
+  //   },
+  // };
+  static DEFAULT_CONFIG = {
+    axes: {
+      0: "yaw",
+      1: "throttle",
+      2: "roll",
+      3: "pitch",
+    },
+
+    buttons: {
+      0: "MODE_LAND", // A
+      1: "MODE_RTL", // B
+      2: "MODE_GUIDED", // X
+      3: "MODE_LOITER", // Y
+      4: "MODE_STABILIZE", //LB
+      5: "MODE_ALTHOLD", // RB
+    },
+  };
+
+  constructor(commandService) {
+    this.commandService = commandService;
+
+    // Use the static reference safely to deep clone your fallback layout
+    this.config = JSON.parse(JSON.stringify(JoystickService.DEFAULT_CONFIG));
+
+    this.axes = { roll: 0, pitch: 0, yaw: 0, throttle: -1 };
+    this.buttons = [];
+    this.previousButtons = [];
+    this.interval = null;
+  }
+
+  setConfiguration(newConfig) {
+    if (!newConfig) {
+      this.config = JSON.parse(JSON.stringify(JoystickService.DEFAULT_CONFIG));
+      console.log(
+        "[BACKEND-JOYSTICK] Received empty config. Resetting to system fallback mappings.",
+      );
+      return;
+    }
+
+    // Safely merge incoming configuration properties with static fallbacks
+    this.config = {
+      axes: {
+        ...JoystickService.DEFAULT_CONFIG.axes,
+        ...(newConfig.axes || {}),
+      },
+      buttons: {
+        ...JoystickService.DEFAULT_CONFIG.buttons,
+        ...(newConfig.buttons || {}),
+      },
+    };
+    console.log(" Current Active Button Assignments:");
+    Object.entries(this.config.buttons).forEach(([buttonIndex, actionName]) => {
+      console.log(
+        `   • [Button ${buttonIndex}] ──► Assigned to Function: ${actionName}`,
+      );
+    });
+
+    console.log(" Current Active Axis Assignments:");
+    Object.entries(this.config.axes).forEach(([axisIndex, actionName]) => {
+      console.log(
+        `   • [Axis ${axisIndex}] ──► Assigned to Function: ${actionName.toUpperCase()}`,
+      );
+    });
+    console.log(
+      "[BACKEND-JOYSTICK] Configuration merged. Active mapping shape:",
+      this.config,
+    );
+  }
+
+  updateAxes(data) {
+    const rawAxes = data.axes ?? [];
+    let rawButtons = data.buttons ?? [];
+    rawButtons = rawButtons.map((b) => (b === true || b === 1 ? 1 : 0));
+
+    if (rawAxes.length > 0 || rawButtons.length > 0) {
+      console.log(
+        `[BACKEND-JOYSTICK] Axes Data: [${rawAxes.map((v) => v.toFixed(2)).join(", ")}] | 🔴 Buttons Data: [${rawButtons.map((b) => (b ? "1" : "0")).join(", ")}]`,
+      );
+    }
+
+    let nextAxes = { roll: 0, pitch: 0, yaw: 0, throttle: -1 };
+
+    // rawAxes.forEach((axisValue, index) => {
+    //   // Safely point to JoystickService.DEFAULT_CONFIG instead of this.DEFAULT_CONFIG
+    //   const assignedAction =
+    //     this.config.axes[index] ||
+    //     JoystickService.DEFAULT_CONFIG.axes[index] ||
+    //     "unassigned";
+
+    //   if (assignedAction !== "unassigned") {
+    //     if (assignedAction === "pitch" || assignedAction === "throttle") {
+    //       nextAxes[assignedAction] = -axisValue;
+    //     } else {
+    //       nextAxes[assignedAction] = axisValue;
+    //     }
+    //   }
+    // });
+
+    // rawAxes.forEach((axisValue, index) => {
+    //   const assignedAction = this.config.axes[index] || "unassigned";
+
+    //   if (assignedAction !== "unassigned") {
+    //     // Clean, single-point inversion logic for flight hardware standards
+    //     // Gamepad standard is typically Down/Right = Positive, Flight is Up/Right = Positive
+    //     if (assignedAction === "pitch" || assignedAction === "throttle") {
+    //       nextAxes[assignedAction] = -axisValue;
+    //     } else {
+    //       nextAxes[assignedAction] = axisValue;
+    //     }
+    //   }
+    // });
+
+    rawAxes.forEach((axisValue, index) => {
+      const assignedAction = this.config.axes[index] || "unassigned";
+
+      if (assignedAction !== "unassigned") {
+        if (assignedAction === "throttle") {
+          nextAxes[assignedAction] = -axisValue;
+        } else if (assignedAction === "pitch") {
+          //  FIX: Keep the raw value.
+          // Up on stick (-1.0) ──► nextAxes.pitch = -1.0 ──► axisToPwm = 1000 PWM
+          // Down on stick (+1.0) ──► nextAxes.pitch = +1.0 ──► axisToPwm = 2000 PWM
+          nextAxes[assignedAction] = axisValue;
+        } else {
+          nextAxes[assignedAction] = axisValue;
+        }
+      }
+    });
+
+    this.axes = nextAxes;
+
+    if (data.buttons) {
+      this.previousButtons = this.buttons.length
+        ? [...this.buttons]
+        : new Array(rawButtons.length).fill(0);
+
+      this.buttons = [...rawButtons];
+
+      this.handleButtonActions();
+    }
+  }
+
+  start() {
+    if (this.interval) return;
+    this.interval = setInterval(() => {
+      this.sendOverride();
+      // this.handleButtonActions();
+      this.previousButtons = [...this.buttons];
+    }, 15); //50Hz
+  }
+
+  async stop() {
+    if (!this.interval) return;
+    clearInterval(this.interval);
+    this.interval = null;
+    await this.commandService.sendRCOverride({
+      roll: 1500,
+      pitch: 1500,
+      yaw: 1500,
+      throttle: 1000,
+    });
+  }
+
+  deadband(value, threshold = 0.05) {
+    const absValue = Math.abs(value);
+    if (absValue < threshold) return 0;
+    const sign = Math.sign(value);
+    return sign * ((absValue - threshold) / (1.0 - threshold));
+  }
+
+  // sendOverride() {
+  //   const rollPwm = this.axisToPwm(this.axes.roll);
+  //   const pitchPwm = this.axisToPwm(-this.axes.pitch);
+  //   const yawPwm = this.axisToPwm(this.axes.yaw);
+  //   const throttlePwm = this.throttleToPwm(-this.axes.throttle);
+
+  //   this.commandService.sendRCOverride({
+  //     roll: rollPwm,
+  //     pitch: pitchPwm,
+  //     yaw: yawPwm,
+  //     throttle: throttlePwm,
+  //   });
+  // }
+
+  sendOverride() {
+    // 🪄 The real axis magic: Map directly from the cleaned object properties
+    // No secondary hardcoded negative signs!
+    const rollPwm = this.axisToPwm(this.axes.roll);
+    const pitchPwm = this.axisToPwm(this.axes.pitch);
+    const yawPwm = this.axisToPwm(this.axes.yaw);
+    const throttlePwm = this.throttleToPwm(this.axes.throttle);
+
+    this.commandService.sendRCOverride({
+      roll: rollPwm,
+      pitch: pitchPwm,
+      yaw: yawPwm,
+      throttle: throttlePwm,
+    });
+  }
+
+  handleButtonActions() {
+    if (this.buttons.length === 0) return;
+
+    const isJustPressed = (index) => {
+      // Check if currently 1 (pressed) and previously 0 (not pressed)
+      return (
+        Number(this.buttons[index]) === 1 &&
+        Number(this.previousButtons[index]) === 0
+      );
+    };
+
+    this.buttons.forEach((_, index) => {
+      if (isJustPressed(index)) {
+        const assignedAction = this.config.buttons[index];
+        if (assignedAction && assignedAction !== "unassigned") {
+          this.executeCustomAction(assignedAction);
+        }
+      }
+    });
+  }
+
+  executeCustomAction(actionKey) {
+    console.log(`Triggering custom action map key: ${actionKey}`);
+    switch (actionKey) {
+      case "ARM_TOGGLE":
+        console.log("Executing: toggleArm");
+        // this.commandService.toggleArm();
+        break;
+      case "MODE_RTL":
+        console.log("Executing: Mode rtl");
+        this.commandService.setMode(6);
+        break;
+      case "MODE_LOITER":
+        console.log("Executing: Loiter");
+        this.commandService.setMode(5);
+        break;
+      case "MODE_ALTHOLD":
+        console.log("Executing: AltHold");
+        this.commandService.setMode(2);
+        break;
+
+      case "MODE_STABILIZE":
+        console.log("Executing: Stabilize Mode");
+        this.commandService.setMode(0); // ArduPilot Stabilize is mode 1
+        break;
+      case "MODE_GUIDED":
+        console.log("Executing: Guided Mode");
+        this.commandService.setMode(4); // ArduPilot Guided is mode 4
+        break;
+      case "MODE_LAND":
+        console.log("Executing: Land Mode");
+        this.commandService.setMode(9); // ArduPilot Land is mode 9
+        break;
+      default:
+        console.warn(`Action string unrecognized: ${actionKey}`);
+    }
+  }
+
+  axisToPwm(axis) {
+    const clamped = Math.max(-1, Math.min(1, axis));
+    const cleanAxis = this.deadband(clamped);
+    return Math.round(1500 + cleanAxis * 500);
+  }
+
+  throttleToPwm(axis) {
+    const clamped = Math.max(-1, Math.min(1, axis));
+    return Math.round(1000 + ((clamped + 1) / 2) * 1000);
+  }
+}
+i want when the d pad buttons 12 13 14 15 are pressed the gimble moves  i want rate here at which it will move when 1 when 0 it stops . again i want another function if this one fails where in the axis are stopped by the button opposite to it is triggered , pressed . again another function where the command is send continously to the instead of one time command same it should control the rate
+
+MAV_CMD_DO_GIMBAL_MANAGER_PITCHYAW (1000)
+Set gimbal manager pitch/yaw setpoints (low rate command). It is possible to set combinations of the values below. E.g. an angle as well as a desired angular rate can be used to get to this angle at a certain angular rate, or an angular rate only will result in continuous turning. NaN is to be used to signal unset. Note: only the gimbal manager will react to this command - it will be ignored by a gimbal device. Use GIMBAL_MANAGER_SET_PITCHYAW if you need to stream pitch/yaw setpoints at higher rate.
+
+Param (Label)	Description	Values	Units
+1 (Pitch angle)	Pitch angle (positive to pitch up, relative to vehicle for FOLLOW mode, relative to world horizon for LOCK mode).	min: -180 max: 180	deg
+2 (Yaw angle)	Yaw angle (positive to yaw to the right, relative to vehicle for FOLLOW mode, absolute to North for LOCK mode).	min: -180 max: 180	deg
+3 (Pitch rate)	Pitch rate (positive to pitch up).		deg/s
+4 (Yaw rate)	Yaw rate (positive to yaw to the right).		deg/s
+5 (Gimbal manager flags)	Gimbal manager flags to use.	GIMBAL_MANAGER_FLAGS	
+7 (Gimbal device ID)	Component ID of gimbal device to address (or 1-6 for non-MAVLink gimbal), 0 for all gimbal device components. Send command multiple times for more than one gimbal (but not all gimbals).
+
+
+GIMBAL_MANAGER_SET_PITCHYAW (287)
+Set gimbal manager pitch and yaw angles (high rate message). This message is to be sent to the gimbal manager (e.g. from a ground station) and will be ignored by gimbal devices. Angles and rates can be set to NaN according to use case. Use MAV_CMD_DO_GIMBAL_MANAGER_PITCHYAW for low-rate adjustments that require confirmation.
+
+Field Name	Type	Units	Values	Description
+target_system	uint8_t			System ID
+target_component	uint8_t			Component ID
+flags	uint32_t		GIMBAL_MANAGER_FLAGS	High level gimbal manager flags to use.
+gimbal_device_id	uint8_t			Component ID of gimbal device to address (or 1-6 for non-MAVLink gimbal), 0 for all gimbal device components. Send command multiple times for more than one gimbal (but not all gimbals).
+[Instance field]: Uniquely identifies a device/subcomponent within a single source/target MAVLink component.
+pitch	float	rad	invalid:NaN	Pitch angle (positive: up, negative: down, NaN to be ignored).
+yaw	float	rad	invalid:NaN	Yaw angle (positive: to the right, negative: to the left, NaN to be ignored).
+pitch_rate	float	rad/s	invalid:NaN	Pitch angular rate (positive: up, negative: down, NaN to be ignored).
+yaw_rate	float	rad/s	invalid:NaN	Yaw angular rate (positive: to the right, negative: to the left, NaN to be ignored).
+
+also providing you with sample of commandservice which contains commands
+
+
+  async takeoff(alt, ignoreHorizontalLock = false) {
+    try {
+      // console.log("takeoff alt is :", alt);
+      console.log("take off method hitted");
+      const msg = new common.CommandLong();
+      msg.targetSystem = this.targetSystem;
+      msg.targetComponent = this.targetComponent;
+      // msg.frame = 1; // MAV_FRAME_GLOBAL_RELATIVE_ALT_INT
+      msg.command = 22; // MAV_CMD_NAV_TAKEOFF
+      // msg.autocontinue = 0;
+
+      msg._param1 = 0;
+      msg._param2 = 0;
+      msg._param3 = 0;
+      msg._param4 = 0;
+      msg._param5 = 0;
+      msg._param6 = 0;
+      msg._param7 = alt;
+
+      await send(this.port, msg, gcsProtocolEngine);
+    } catch (error) {
+      console.error(
+        "[MAVLINK TAKEOFF ERROR] Failed to transmit command structure:",
+        error,
+      );
+    }
+  }
+
+  async missionStart() {
+    const msg = new common.CommandLong();
+
+    msg.targetSystem = this.targetSystem;
+    msg.targetComponent = this.targetComponent;
+    msg.command = 300; // MISSION_START
+
+    await send(this.port, msg, gcsProtocolEngine);
+  }
+  async setVelocity(vx, vy, vz) {
+    const msg = new common.SetPositionTargetLocalNed();
+
+    msg.targetSystem = this.targetSystem;
+    msg.targetComponent = this.targetComponent;
+
+    msg.vx = vx;
+    msg.vy = vy;
+    msg.vz = vz;
+
+    msg.typeMask = 0b0000111111000111; // position ignored
+
+    await send(this.port, msg, gcsProtocolEngine);
+  }
+  async setYaw(angle) {
+    const msg = new common.CommandLong();
+
+    msg.targetSystem = this.targetSystem;
+    msg.targetComponent = this.targetComponent;
+
+    msg.command = 115; // CONDITION_YAW
+    msg.param1 = angle;
+
+    await send(this.port, msg, gcsProtocolEngine);
+  }
+
+  async toggleArm() {
+    if (this.isVehicleArmed) {
+      console.log("Vehicle is armed. Sending disarm command...");
+      await this.disarm();
+    } else {
+      console.log("Vehicle is disarmed. Sending arm command...");
+      await this.arm();
+    }
+  }
+
+  async arm() {
+    const msg = new common.CommandLong();
+
+    msg.command = 400; // MAV_CMD_COMPONENT_ARM_DISARM
+    msg._param1 = 1; // arm
+    msg.confirmation = 0;
+    msg.targetSystem = this.targetSystem;
+    msg.targetComponent = this.targetComponent;
+
+    const commandId = 400;
+
+    this.pendingCommands.set(commandId, {
+      command: 400,
+      time: Date.now(),
+    });
+
+    await send(this.port, msg, gcsProtocolEngine);
+
+    console.log("Drone Arm Successfull");
+
+    console.log(
+      `[INFO] [MAVLINK_TX] Sending CMD_LONG (${msg.command}). Params: P1=${msg._param1}, P2=${msg._param2}`,
+    );
+  }
+
+  async disarm() {
+    const msg = new common.CommandLong();
+
+    msg.command = 400;
+    msg._param1 = 0; // disarm
+    msg._param2 = 0;
+    msg.confirmation = 0;
+    msg.targetSystem = this.targetSystem;
+    msg.targetComponent = this.targetComponent;
+
+    await send(this.port, msg, gcsProtocolEngine);
+    console.log("Drone Disarmed Successfull");
+
+    console.log(
+      `[INFO] [MAVLINK_TX] Sending CMD_LONG (${msg.command}). Params: P1=${msg._param1}, P2=${msg._param2}`,
+    );
+  }
+
+  async land() {
+    const msg = new common.CommandLong();
+
+    msg.targetSystem = this.targetSystem;
+    msg.targetComponent = this.targetComponent;
+
+    msg.command = 21; // LAND
+    msg.param1 = 0;
+
+    await send(this.port, msg, gcsProtocolEngine);
+  }
+
+ChatGPT said:
+Yes. The cleanest way to implement this is to treat D-pad buttons 12–15 as a gimbal velocity controller, separate from your flight-stick axes.
+
+I would use:
+
+12 = D-pad Up → gimbal pitch up
+13 = D-pad Down → gimbal pitch down
+14 = D-pad Left → gimbal yaw left
+15 = D-pad Right → gimbal yaw right
+And make the rate configurable, for example 10 deg/s.
+
+There are two approaches:
+
+Primary: MAV_CMD_DO_GIMBAL_MANAGER_PITCHYAW (1000) with only pitch/yaw rates. This is a good fit for "move while pressed, stop when released." MAVLink explicitly supports an angular-rate-only command for continuous turning. 
+M
+MAVLink
++1
+Fallback/high-rate: GIMBAL_MANAGER_SET_PITCHYAW (287) streamed periodically, e.g. every 50 ms. This is the appropriate message when you want high-rate streaming. 
+M
+MAVLink
+I would implement both in your CommandService, with the joystick using the first one by default and the second one as a configurable high-rate mode.
+
+1. Add these methods to CommandService
+Low-rate COMMAND_LONG implementation
+This uses command 1000.
+
+async setGimbalRate(pitchRateDegS = 0, yawRateDegS = 0, gimbalDeviceId = 0) {
+  try {
+    const msg = new common.CommandLong();
+
+    msg.targetSystem = this.targetSystem;
+    msg.targetComponent = this.targetComponent;
+
+    msg.command = 1000; // MAV_CMD_DO_GIMBAL_MANAGER_PITCHYAW
+    msg.confirmation = 0;
+
+    // NaN means "do not change/set this field"
+    msg._param1 = NaN; // Pitch angle
+    msg._param2 = NaN; // Yaw angle
+
+    // Angular rates in deg/s
+    msg._param3 = pitchRateDegS;
+    msg._param4 = yawRateDegS;
+
+    // Gimbal manager flags
+    // 0 = body/follow frame
+    // 16 = yaw lock / earth frame
+    msg._param5 = 0;
+
+    // Reserved
+    msg._param6 = 0;
+
+    // Gimbal device ID
+    // 0 = all
+    msg._param7 = gimbalDeviceId;
+
+    await send(this.port, msg, gcsProtocolEngine);
+
+    console.log(
+      `[GIMBAL] rate command: pitch=${pitchRateDegS} deg/s, yaw=${yawRateDegS} deg/s`,
+    );
+  } catch (error) {
+    console.error(
+      "[MAVLINK GIMBAL RATE ERROR] Failed to send gimbal rate:",
+      error,
+    );
+  }
+}
+
+The important part is:
+
+msg._param1 = NaN;
+msg._param2 = NaN;
+msg._param3 = pitchRateDegS;
+msg._param4 = yawRateDegS;
+
+That means:
+
+Pitch angle = ignored
+Yaw angle   = ignored
+Pitch rate  = X deg/s
+Yaw rate    = Y deg/s
+
+This matches the MAVLink definition of command 1000. 
+M
+MAVLink
+
+2. Add a dedicated stop method
+I strongly recommend having an explicit stop function.
+
+async stopGimbal() {
+  return this.setGimbalRate(0, 0, 0);
+}
+
+So:
+
+await commandService.stopGimbal();
+
+means:
+
+Pitch rate = 0
+Yaw rate   = 0
+
+3. Add the high-rate MAVLink 287 implementation
+Your MAVLink library appears to expose generated message classes through common, just like:
+
+new common.CommandLong();
+new common.SetPositionTargetLocalNed();
+
+So the corresponding generated class should normally be:
+
+common.GimbalManagerSetPitchyaw
+
+depending on the exact MAVLink JS generator/package you're using.
+
+I would implement it like this:
+
+async setGimbalRateHighRate(
+  pitchRateDegS = 0,
+  yawRateDegS = 0,
+  gimbalDeviceId = 0,
+) {
+  try {
+    const msg = new common.GimbalManagerSetPitchyaw();
+
+    msg.targetSystem = this.targetSystem;
+    msg.targetComponent = this.targetComponent;
+
+    // 0 = body/follow frame
+    msg.flags = 0;
+
+    msg.gimbalDeviceId = gimbalDeviceId;
+
+    // Angles are ignored
+    msg.pitch = NaN;
+    msg.yaw = NaN;
+
+    // MAVLink message uses radians/sec
+    msg.pitchRate = (pitchRateDegS * Math.PI) / 180;
+    msg.yawRate = (yawRateDegS * Math.PI) / 180;
+
+    await send(this.port, msg, gcsProtocolEngine);
+  } catch (error) {
+    console.error(
+      "[MAVLINK GIMBAL HIGH RATE ERROR] Failed to send gimbal setpoint:",
+      error,
+    );
+  }
+}
+
+Notice the important difference:
+
+Command 1000
+Rates are:
+
+degrees/second
+
+Message 287
+Rates are:
+
+radians/second
+
+MAVLink defines GIMBAL_MANAGER_SET_PITCHYAW.pitch_rate and .yaw_rate as rad/s. 
+M
+MAVLink
+
+4. Add D-pad configuration to JoystickService
+I would add this near the top of your class:
+
+static GIMBAL_CONFIG = {
+  enabled: true,
+
+  // Rate while the button is held
+  rateDegS: 10,
+
+  // D-pad button indexes
+  buttons: {
+    pitchUp: 12,
+    pitchDown: 13,
+    yawLeft: 14,
+    yawRight: 15,
+  },
+
+  // Primary method:
+  // "command" = MAV_CMD_DO_GIMBAL_MANAGER_PITCHYAW (1000)
+  // "stream"  = GIMBAL_MANAGER_SET_PITCHYAW (287)
+  mode: "command",
+
+  // Used only when mode === "stream"
+  streamIntervalMs: 50,
+
+  // 0 = all gimbals
+  gimbalDeviceId: 0,
+};
+
+You can therefore easily change the speed:
+
+rateDegS: 5
+
+for slower movement, or:
+
+rateDegS: 20
+
+for faster movement.
+
+5. Add gimbal state to your constructor
+Add:
+
+this.gimbal = {
+  pitchRate: 0,
+  yawRate: 0,
+};
+
+this.gimbalInterval = null;
+
+So your constructor becomes:
+
+constructor(commandService) {
+  this.commandService = commandService;
+
+  this.config = JSON.parse(
+    JSON.stringify(JoystickService.DEFAULT_CONFIG),
+  );
+
+  this.axes = {
+    roll: 0,
+    pitch: 0,
+    yaw: 0,
+    throttle: -1,
+  };
+
+  this.buttons = [];
+  this.previousButtons = [];
+
+  this.interval = null;
+
+  // Gimbal state
+  this.gimbal = {
+    pitchRate: 0,
+    yawRate: 0,
+  };
+
+  this.gimbalInterval = null;
+}
+
+6. Add the D-pad processing
+Add this method to JoystickService:
+
+handleGimbalButtons() {
+  if (!this.buttons.length) return;
+
+  const {
+    pitchUp,
+    pitchDown,
+    yawLeft,
+    yawRight,
+  } = JoystickService.GIMBAL_CONFIG.buttons;
+
+  const isPressed = (index) =>
+    Number(this.buttons[index]) === 1;
+
+  const pitchUpPressed = isPressed(pitchUp);
+  const pitchDownPressed = isPressed(pitchDown);
+  const yawLeftPressed = isPressed(yawLeft);
+  const yawRightPressed = isPressed(yawRight);
+
+  let pitchRate = 0;
+  let yawRate = 0;
+
+  /*
+   * Pitch
+   *
+   * UP    = positive pitch rate
+   * DOWN  = negative pitch rate
+   */
+  if (pitchUpPressed && !pitchDownPressed) {
+    pitchRate = JoystickService.GIMBAL_CONFIG.rateDegS;
+  } else if (pitchDownPressed && !pitchUpPressed) {
+    pitchRate = -JoystickService.GIMBAL_CONFIG.rateDegS;
+  }
+
+  /*
+   * Yaw
+   *
+   * RIGHT = positive yaw rate
+   * LEFT  = negative yaw rate
+   */
+  if (yawRightPressed && !yawLeftPressed) {
+    yawRate = JoystickService.GIMBAL_CONFIG.rateDegS;
+  } else if (yawLeftPressed && !yawRightPressed) {
+    yawRate = -JoystickService.GIMBAL_CONFIG.rateDegS;
+  }
+
+  /*
+   * Detect change.
+   *
+   * Don't send a new command if nothing changed.
+   */
+  if (
+    pitchRate === this.gimbal.pitchRate &&
+    yawRate === this.gimbal.yawRate
+  ) {
+    return;
+  }
+
+  this.gimbal.pitchRate = pitchRate;
+  this.gimbal.yawRate = yawRate;
+
+  console.log(
+    `[GIMBAL] D-pad rate changed: pitch=${pitchRate} deg/s yaw=${yawRate} deg/s`,
+  );
+
+  this.sendGimbalRate();
+}
+
+Then:
+
+async sendGimbalRate() {
+  const {
+    mode,
+    gimbalDeviceId,
+  } = JoystickService.GIMBAL_CONFIG;
+
+  if (mode === "stream") {
+    return;
+  }
+
+  await this.commandService.setGimbalRate(
+    this.gimbal.pitchRate,
+    this.gimbal.yawRate,
+    gimbalDeviceId,
+  );
+}
+
+7. Call it from updateAxes()
+You currently have:
+
+if (data.buttons) {
+  this.previousButtons = this.buttons.length
+    ? [...this.buttons]
+    : new Array(rawButtons.length).fill(0);
+
+  this.buttons = [...rawButtons];
+
+  this.handleButtonActions();
+}
+
+Change it to:
+
+if (data.buttons) {
+  this.previousButtons = this.buttons.length
+    ? [...this.buttons]
+    : new Array(rawButtons.length).fill(0);
+
+  this.buttons = [...rawButtons];
+
+  // Normal joystick buttons
+  this.handleButtonActions();
+
+  // D-pad gimbal control
+  this.handleGimbalButtons();
+}
+
+8. This gives you the first behavior you asked for
+For example:
+
+Button 12 pressed
+        ↓
+pitchRate = +10 deg/s
+        ↓
+Gimbal moves UP
+
+When button 12 is released:
+
+Button 12 released
+        ↓
+pitchRate = 0
+        ↓
+Gimbal stops
+
+Likewise:
+
+12 → pitch up
+13 → pitch down
+14 → yaw left
+15 → yaw right
+
+9. The "opposite button stops it" fallback
+You specifically asked for:
+
+another function if this one fails where in the axis are stopped by the button opposite to it is triggered, pressed
+
+I would make this explicit.
+
+For example:
+
+UP  → move pitch up
+DOWN → stop pitch up
+
+and:
+
+LEFT  → move yaw left
+RIGHT → stop yaw left
+
+But you actually get this behavior automatically with the code above.
+
+For example, suppose:
+
+12 = UP
+
+is stuck at 1.
+
+Then the user presses:
+
+13 = DOWN
+
+The code sees:
+
+pitchUpPressed = true;
+pitchDownPressed = true;
+
+and because both are pressed:
+
+pitchRate = 0;
+
+So the opposite button acts as a safety stop.
+
+If you want the opposite button to explicitly send a stop command even when the original button remains stuck, I'd make it even more defensive:
+
+handleGimbalButtons() {
+  if (!this.buttons.length) return;
+
+  const {
+    pitchUp,
+    pitchDown,
+    yawLeft,
+    yawRight,
+  } = JoystickService.GIMBAL_CONFIG.buttons;
+
+  const pressed = (index) =>
+    Number(this.buttons[index]) === 1;
+
+  const up = pressed(pitchUp);
+  const down = pressed(pitchDown);
+  const left = pressed(yawLeft);
+  const right = pressed(yawRight);
+
+  let pitchRate = 0;
+  let yawRate = 0;
+
+  // --------------------------------------------------
+  // PITCH
+  // --------------------------------------------------
+
+  if (up && !down) {
+    pitchRate = JoystickService.GIMBAL_CONFIG.rateDegS;
+  } else if (down && !up) {
+    pitchRate = -JoystickService.GIMBAL_CONFIG.rateDegS;
+  } else {
+    // Both pressed OR neither pressed = STOP
+    pitchRate = 0;
+  }
+
+  // --------------------------------------------------
+  // YAW
+  // --------------------------------------------------
+
+  if (right && !left) {
+    yawRate = JoystickService.GIMBAL_CONFIG.rateDegS;
+  } else if (left && !right) {
+    yawRate = -JoystickService.GIMBAL_CONFIG.rateDegS;
+  } else {
+    // Both pressed OR neither pressed = STOP
+    yawRate = 0;
+  }
+
+  if (
+    pitchRate === this.gimbal.pitchRate &&
+    yawRate === this.gimbal.yawRate
+  ) {
+    return;
+  }
+
+  this.gimbal.pitchRate = pitchRate;
+  this.gimbal.yawRate = yawRate;
+
+  this.sendGimbalRate();
+}
+
+This is the behavior I recommend.
+
+10. High-rate streaming mode
+The other thing you asked for is:
+
+the command is send continously ... same it should control the rate
+
+For that, don't repeatedly send COMMAND_LONG at 50/66 Hz.
+
+Instead, use message 287, GIMBAL_MANAGER_SET_PITCHYAW, which MAVLink specifically defines as the high-rate message. 
+M
+MAVLink
+
+Add:
+
+startGimbalStream() {
+  if (this.gimbalInterval) return;
+
+  const intervalMs =
+    JoystickService.GIMBAL_CONFIG.streamIntervalMs;
+
+  console.log(
+    `[GIMBAL] Starting high-rate stream at ${1000 / intervalMs} Hz`,
+  );
+
+  this.gimbalInterval = setInterval(() => {
+    this.sendGimbalStream();
+  }, intervalMs);
+}
+
+And:
+
+stopGimbalStream() {
+  if (!this.gimbalInterval) return;
+
+  clearInterval(this.gimbalInterval);
+  this.gimbalInterval = null;
+
+  console.log("[GIMBAL] High-rate stream stopped");
+}
+
+Then:
+
+async sendGimbalStream() {
+  await this.commandService.setGimbalRateHighRate(
+    this.gimbal.pitchRate,
+    this.gimbal.yawRate,
+    JoystickService.GIMBAL_CONFIG.gimbalDeviceId,
+  );
+}
+
+11. Modify handleGimbalButtons() for both modes
+I would ultimately use this version:
+
+handleGimbalButtons() {
+  if (!this.buttons.length) return;
+
+  const {
+    pitchUp,
+    pitchDown,
+    yawLeft,
+    yawRight,
+  } = JoystickService.GIMBAL_CONFIG.buttons;
+
+  const pressed = (index) =>
+    Number(this.buttons[index]) === 1;
+
+  const up = pressed(pitchUp);
+  const down = pressed(pitchDown);
+  const left = pressed(yawLeft);
+  const right = pressed(yawRight);
+
+  let pitchRate = 0;
+  let yawRate = 0;
+
+  // ---------------------------
+  // PITCH
+  // ---------------------------
+
+  if (up && !down) {
+    pitchRate =
+      JoystickService.GIMBAL_CONFIG.rateDegS;
+  } else if (down && !up) {
+    pitchRate =
+      -JoystickService.GIMBAL_CONFIG.rateDegS;
+  }
+
+  // ---------------------------
+  // YAW
+  // ---------------------------
+
+  if (right && !left) {
+    yawRate =
+      JoystickService.GIMBAL_CONFIG.rateDegS;
+  } else if (left && !right) {
+    yawRate =
+      -JoystickService.GIMBAL_CONFIG.rateDegS;
+  }
+
+  // ---------------------------
+  // No change
+  // ---------------------------
+
+  if (
+    pitchRate === this.gimbal.pitchRate &&
+    yawRate === this.gimbal.yawRate
+  ) {
+    return;
+  }
+
+  this.gimbal.pitchRate = pitchRate;
+  this.gimbal.yawRate = yawRate;
+
+  console.log(
+    `[GIMBAL] pitch=${pitchRate}°/s yaw=${yawRate}°/s`,
+  );
+
+  // High-rate mode is continuously streamed.
+  if (
+    JoystickService.GIMBAL_CONFIG.mode === "stream"
+  ) {
+    this.startGimbalStream();
+    return;
+  }
+
+  // Low-rate COMMAND_LONG mode.
+  this.sendGimbalRate();
+}
+
+12. One important correction to your stop()
+Your joystick stop() currently does:
+
+await this.commandService.sendRCOverride({
+  roll: 1500,
+  pitch: 1500,
+  yaw: 1500,
+  throttle: 1000,
+});
+
+You should also stop the gimbal there.
+
+async stop() {
+  if (this.interval) {
+    clearInterval(this.interval);
+    this.interval = null;
+  }
+
+  // Stop gimbal high-rate stream
+  this.stopGimbalStream();
+
+  // Stop gimbal movement
+  this.gimbal.pitchRate = 0;
+  this.gimbal.yawRate = 0;
+
+  try {
+    await this.commandService.stopGimbal();
+  } catch (error) {
+    console.error(
+      "[GIMBAL] Failed to stop gimbal:",
+      error,
+    );
+  }
+
+  // Stop aircraft RC override
+  await this.commandService.sendRCOverride({
+    roll: 1500,
+    pitch: 1500,
+    yaw: 1500,
+    throttle: 1000,
+  });
+}
+
+This is important because otherwise the gimbal could continue moving after the joystick service itself has been stopped.
+
+13. I would actually simplify your architecture
+You don't need the gimbal commands mixed into executeCustomAction().
+
+Keep your architecture like this:
+
+JoystickService
+│
+├── Aircraft axes
+│   ├── roll
+│   ├── pitch
+│   ├── yaw
+│   └── throttle
+│
+├── Normal buttons
+│   └── handleButtonActions()
+│
+└── D-pad
+    └── handleGimbalButtons()
+          │
+          ├── pitchRate
+          └── yawRate
+                 │
+                 ▼
+          CommandService
+                 │
+                 ├── setGimbalRate()
+                 │      MAV_CMD 1000
+                 │
+                 └── setGimbalRateHighRate()
+                        MAVLINK 287
+
+This keeps the flight-control code and camera-control code independent.
+
+Recommended configuration
+I'd start with:
+
+static GIMBAL_CONFIG = {
+  enabled: true,
+
+  rateDegS: 10,
+
+  buttons: {
+    pitchUp: 12,
+    pitchDown: 13,
+    yawLeft: 14,
+    yawRight: 15,
+  },
+
+  mode: "command",
+
+  streamIntervalMs: 50,
+
+  gimbalDeviceId: 0,
+};
+
+So the initial behavior is:
+
+D-pad	Result
+12	Pitch up at 10°/s
+13	Pitch down at 10°/s
+14	Yaw left at 10°/s
+15	Yaw right at 10°/s
+Release	Stop
+Opposite pressed	Stop/override
+Both pitch buttons	Stop pitch
+Both yaw buttons	Stop yaw
+
+For your first implementation, I recommend mode: "command" because MAV_CMD_DO_GIMBAL_MANAGER_PITCHYAW is specifically designed to accept an angular rate and produce continuous turning. 
+A
+ArduPilot.org
++1
+
+If the particular gimbal/autopilot combination doesn't reliably maintain that rate command, switch to:
+
+mode: "stream"
+
+and stream GIMBAL_MANAGER_SET_PITCHYAW at 20 Hz (50 ms). That message is explicitly intended for high-rate pitch/yaw setpoints. 
+M
+MAVLink
+
+One thing to verify in your generated MAVLink library: the class may be named GimbalManagerSetPitchyaw, GimbalManagerSetPitchYaw, or similar depending on the JS generator. The MAVLink message itself is definitely message ID 287; your installed generated common module determines the exact JavaScript class name. 
+M
+MAVLink
+
+ArduPilot — Control a Gimbal / Camera Mount
+MAVLink Common Message Set — GIMBAL_MANAGER_SET_PITCHYAW
+
+
+M
+A
+Sources
+
+
+ChatGPT is AI and can make mistakes.
+

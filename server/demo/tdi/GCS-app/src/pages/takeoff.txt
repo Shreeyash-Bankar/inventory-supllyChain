@@ -1,0 +1,3872 @@
+import { app, BrowserWindow, ipcMain, session } from "electron";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { SerialPort } from "serialport";
+// import { startTelemetry, stopTelemetry } from "./modules/telemetry.js";
+import { ParamService } from "./modules/paramServices.js";
+import { getParamMeta, loadParamMeta } from "./modules/paramMeta.js";
+import { CommandService } from "./modules/commandServices.js";
+import { FlightActionService } from "./modules/flightActionService.js";
+import { FlightState } from "./modules/flightState.js";
+import { TelemetryEngine } from "./modules/telemetryEngine.js";
+import { HardwareCheck } from "./modules/hardwareCheck.js";
+import { UdpTransport } from "./modules/udpTransporter.js";
+import { CalibrationService } from "./modules/calibrationService.js";
+import { CompassCalibrationService } from "./modules/compassCalibrationService.js";
+import { CompassMotCalibrationService } from "./modules/compassMotCalibration.js";
+import { JoystickService } from "./modules/joystickService.js";
+import { Underline } from "lucide-react";
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+let win;
+let port;
+let startupPacketBuffer = [];
+let activeConnection = null; // renamed from port to represent serial or udp
+let heartbeatIntervalId = null;
+let paramService;
+let commandService;
+let actionService;
+let telemetryEngine = null;
+let calibrationService;
+let compassCalibrationService;
+let compassMotCalibrationService;
+let joystickService;
+
+let connectionState = "DISCONNECTED";
+
+function sendConnectionState(state) {
+  connectionState = state;
+
+  if (win) {
+    win.webContents.send("connection-state", state);
+  }
+
+  console.log(" Connection State:", state);
+}
+
+function createWindow() {
+  win = new BrowserWindow({
+    width: 1000,
+    height: 800,
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      // preload: path.join(__dirname, "preload.js"),
+
+      preload: path.join(app.getAppPath(), "electron/main/preload.js"),
+    },
+  });
+  if (app.isPackaged) {
+    win.loadFile(path.join(app.getAppPath(), "dist/index.html"));
+  } else {
+    win.loadURL("http://localhost:5173");
+    win.webContents.openDevTools();
+  }
+
+  // win.loadURL("http://localhost:5173");
+  win.webContents.openDevTools();
+}
+
+function attachConnectionEvents(connection) {
+  const isUdp = connection instanceof UdpTransport;
+  const label = isUdp ? "[MAIN-UDP]" : "[MAIN-SERIAL]";
+
+  connection.on("open", () => {
+    console.log(
+      `${label}  Link physically established. Starting MAVLink validation sniffer...`,
+    );
+
+    const heartbeatTimeout = setTimeout(() => {
+      if (connectionState === "CONNECTING") {
+        console.error(
+          `${label}  VERIFICATION TIMEOUT: No MAVLink packets matched within deadline.`,
+        );
+        if (isUdp) {
+          console.error(
+            `${label}  TIP: Make sure your Simulator/Drone is actively streaming packets to local port ${connection.localPort}.`,
+          );
+        }
+        sendConnectionState("ERROR");
+        if (connection.isOpen) connection.close();
+      }
+    }, 15000); // 15 seconds ideal for safe network handshakes
+
+    const sniffer = (data) => {
+      // Save every chunk that arrives before TelemetryEngine starts
+      startupPacketBuffer.push(Buffer.from(data));
+
+      console.log(
+        `${label}  Sniffer processing incoming buffer chunk of size: ${data.length} bytes`,
+      );
+
+      const hasMavlink = data.some((byte) => byte === 0xfe || byte === 0xfd);
+
+      if (hasMavlink) {
+        console.log(
+          `${label}  MAVLINK VALIDATED! Magic preamble match found. Orchestrating services...`,
+        );
+        clearTimeout(heartbeatTimeout);
+        connection.removeListener("data", sniffer);
+
+        sendConnectionState("CONNECTED");
+
+        paramService = new ParamService(connection, win);
+
+        commandService = new CommandService(connection, win);
+        console.log("Command Service Started");
+        joystickService = new JoystickService(commandService);
+        console.log("Joystick Service Started");
+        // joystickService.start(1133, 49693);
+        joystickService.start();
+        compassCalibrationService = new CompassCalibrationService(
+          commandService,
+          win,
+        );
+        compassMotCalibrationService = new CompassMotCalibrationService(
+          commandService,
+          win,
+        );
+        const flightState = new FlightState(win);
+        const hardwareCheck = new HardwareCheck(win);
+        calibrationService = new CalibrationService(commandService, win);
+
+        actionService = new FlightActionService(
+          commandService,
+          paramService,
+          flightState,
+        );
+
+        telemetryEngine = new TelemetryEngine({
+          port: connection,
+          win,
+          flightState,
+          paramService,
+          commandService,
+          hardwareCheck,
+          calibrationService,
+          compassCalibrationService,
+          compassMotCalibrationService,
+        });
+
+        console.log(`${label}  Starting Telemetry Engine updates...`);
+        telemetryEngine.start();
+
+        // Replay all packets received during startup
+        for (const chunk of startupPacketBuffer) {
+          telemetryEngine.onData(chunk);
+        }
+
+        startupPacketBuffer = [];
+
+        if (heartbeatIntervalId) clearInterval(heartbeatIntervalId);
+
+        heartbeatIntervalId = setInterval(() => {
+          if (connection.isOpen) {
+            // Option A: Call a method inside your commandService if it exists
+            if (typeof commandService?.sendHeartbeat === "function") {
+              commandService.sendHeartbeat();
+            } else {
+              // Option B: Manual fallback if your commandService doesn't have it yet.
+              // This is a minimal MAVLink v1 Heartbeat byte buffer structure (System ID: 255, Component ID: 190)
+              const gcsHeartbeatBuffer = Buffer.from([
+                0xfe, // MAVLink 1 Magic Byte
+                0x09, // Payload Length (9 bytes)
+                0x00, // Packet Sequence
+                0xff, // System ID (255 = Ground Control Station)
+                0xbe, // Component ID (190 = Custom GCS Component)
+                0x00, // Message ID (0 = HEARTBEAT)
+                0x00,
+                0x00,
+                0x00,
+                0x00, // Custom Mode (4 bytes)
+                0x06, // Type (6 = MAV_TYPE_GCS)
+                0x03, // Autopilot (3 = MAV_AUTOPILOT_ARDUPILOTMEGA)
+                0x00, // Base Mode
+                0x00, // System Status
+                0x03, // MAVLink Version (3)
+                0x1c,
+                0x5c, // MAVLink CRC Checksum
+              ]);
+
+              connection.write(gcsHeartbeatBuffer);
+            }
+          }
+        }, 1000); // Sends every 1 second
+
+        setTimeout(() => {
+          console.log(
+            `${label}  Requesting MAVLink streams from drone target...`,
+          );
+          commandService?.requestStreams();
+          // commandService?.requestStatusText();
+        }, 200);
+      } else {
+        console.log(
+          `${label}  Raw bytes received but missing MAVLink magic headers (0xFE/0xFD). Skipping chunk.`,
+        );
+      }
+    };
+
+    connection.on("data", sniffer);
+  });
+
+  connection.on("close", () => {
+    console.log(`${label}  Connection event 'close' emitted.`);
+    sendConnectionState("DISCONNECTED");
+  });
+
+  connection.on("error", (err) => {
+    console.error(`${label}  Transport error fired:`, err);
+    sendConnectionState("ERROR");
+  });
+}
+
+app.whenReady().then(async () => {
+  createWindow();
+  await loadParamMeta();
+  await new Promise((r) => setTimeout(r, 500));
+});
+// app.whenReady().then(async () => {
+//   // Increase Chromium's HTTP cache size (optional)
+//   try {
+//     await session.defaultSession.setCacheSize(1024 * 1024 * 1024); // 1 GB
+//   } catch (err) {
+//     console.log("Could not set cache size:", err);
+//   }
+
+//   createWindow();
+
+//   await loadParamMeta();
+//   await new Promise((r) => setTimeout(r, 500));
+// });
+
+ipcMain.handle("get-ports", async () => {
+  const ports = await SerialPort.list();
+
+  return ports.map((p) => ({
+    path: p.path,
+    name: p.friendlyName || p.manufacturer || "Unknown",
+  }));
+});
+
+// Add this near your app.whenReady()
+SerialPort.list().then(() => {
+  // Listen for physical hardware changes
+  process.on("uncaughtException", (err) => {
+    if (err.message.includes("removed")) {
+      console.log(" Hardware change detected");
+      // You can trigger a port refresh here if you want
+      if (win && !win.isDestroyed()) {
+        win.webContents.send("usb-hardware-change");
+      }
+    }
+  });
+});
+
+ipcMain.on("connect-port", async (event, payload) => {
+  try {
+    const { type, path, baudRate, localPort } = payload || {};
+    sendConnectionState("CONNECTING");
+
+    if (type === "UDP") {
+      console.log(` Initializing UDP Transport on port ${localPort}`);
+      activeConnection = new UdpTransport({ localPort });
+      attachConnectionEvents(activeConnection);
+      activeConnection.open();
+    } else {
+      // Fallback to default Serial behavior
+      if (!path || typeof path !== "string") {
+        throw new Error("Invalid serial port path");
+      }
+      activeConnection = new SerialPort({
+        path,
+        baudRate: baudRate || 115200,
+      });
+      attachConnectionEvents(activeConnection);
+    }
+  } catch (err) {
+    console.error("Connection setup error:", err);
+    sendConnectionState("ERROR");
+  }
+});
+
+ipcMain.on("request-params", () => {
+  console.log(" request-params received");
+  if (paramService) {
+    paramService.requestAll();
+  } else {
+    console.log(" paramService not ready");
+  }
+});
+
+ipcMain.on("set-param", (_, payload) => {
+  if (!paramService) return;
+  paramService.setParam(payload);
+});
+
+ipcMain.handle("get-param-meta", () => {
+  return getParamMeta();
+});
+
+ipcMain.on("disconnect-port", async () => {
+  try {
+    sendConnectionState("DISCONNECTING");
+
+    if (telemetryEngine) {
+      telemetryEngine.stop();
+      telemetryEngine = null;
+    }
+    if (joystickService?.stop()) {
+      await joystickService?.stop();
+      joystickService = null;
+    }
+
+    if (activeConnection) {
+      // Only drain if it is a serial port instance
+      if (
+        typeof activeConnection.drain === "function" &&
+        activeConnection.isOpen &&
+        !(activeConnection instanceof UdpTransport)
+      ) {
+        activeConnection.drain();
+      }
+
+      activeConnection.removeAllListeners();
+
+      if (activeConnection.isOpen) {
+        activeConnection.close(() => {
+          activeConnection = null;
+          paramService = null;
+          commandService = null;
+          actionService = null;
+          // joystickService = null;
+          sendConnectionState("DISCONNECTED");
+        });
+      } else {
+        activeConnection = null;
+        sendConnectionState("DISCONNECTED");
+      }
+    } else {
+      sendConnectionState("DISCONNECTED");
+    }
+  } catch (err) {
+    console.error("Disconnection error:", err);
+    sendConnectionState("ERROR");
+  }
+});
+
+// ipcMain.on("flight-command", async (_, data) => {
+//   console.log("[IPC MAIN] flight command received", data)
+//   if (!actionService || !commandService) return;
+
+//   const { cmd, payload } = data;
+
+//   switch (cmd) {
+//     case "ARM":
+//       return actionService.arm();
+
+//     case "DISARM":
+//       return actionService.disarm();
+
+//     case "RTL":
+//       return actionService.rtl();
+
+//     case "LAND":
+//       return actionService.land();
+
+//     case "TAKEOFF":
+//       return actionService.takeoff(payload?.alt);
+
+//     case "GUIDED":
+//       return actionService.flyTo(payload.lat, payload.lon, payload.alt);
+
+//     case "AUTO":
+//       return actionService.setMode("AUTO");
+
+//     case "STABILIZE":
+//       return actionService.setMode("STABILIZE");
+//     default:
+//       console.log("Unknown command:", cmd);
+//   }
+// });
+
+ipcMain.on("start-accel-calibration", async () => {
+  await calibrationService.start();
+  // console.log("calibration hitted the main");
+});
+
+ipcMain.on("confirm-accel-position", async () => {
+  await calibrationService.confirmPosition();
+});
+
+ipcMain.on("start-compass-calibration", async () => {
+  await compassCalibrationService?.start();
+});
+
+ipcMain.on("cancel-compass-calibration", async () => {
+  await compassCalibrationService?.cancel();
+});
+
+ipcMain.on("start-compassmot-calibration", async () => {
+  console.log(" IPC START COMPASSMOT");
+
+  await compassMotCalibrationService?.startCompassMot();
+});
+
+ipcMain.on("set-throttle", async (_, throttlePercentage) => {
+  await compassMotCalibrationService?.handleUserThrottleInput(
+    throttlePercentage,
+  );
+});
+
+ipcMain.on("stop-compassmot-calibration", async () => {
+  await compassMotCalibrationService?.stopCompassMot();
+});
+
+ipcMain.on("restart-FC", async () => {
+  await commandService?.rebootFC();
+});
+
+ipcMain.on("joystick-enable", () => {
+  joystickService?.start();
+});
+
+ipcMain.on("joystick-disable", () => {
+  joystickService?.stop();
+});
+
+ipcMain.on("joystick-update", (_, joystick) => {
+  joystickService?.updateAxes(joystick);
+});
+
+ipcMain.on("joystick-update-config", (_, config) => {
+  if (joystickService) {
+    // Inject the customizable lookup configuration dynamically into the running service
+    joystickService.setConfiguration(config);
+  }
+});
+
+ipcMain.on("flight-command", async (_, data) => {
+  console.log(" [IPC-MAIN] flight-command payload received:", data);
+  if (!commandService || !actionService) {
+    console.error(" [IPC-MAIN] CommandService is not active or ready.");
+    return;
+  }
+
+  const { cmd, payload } = data;
+  console.log("Payload from main.js", payload);
+
+  try {
+    switch (cmd) {
+      case "ARM":
+        console.log(" [MAV-EXECUTE] Dispatching hardware arm command...");
+        return await commandService.arm();
+
+      case "DISARM":
+        console.log(" [MAV-EXECUTE] Dispatching hardware disarm command...");
+        return await commandService.disarm();
+
+      case "SET_MODE":
+        if (payload !== undefined && payload !== null) {
+          console.log(
+            ` [MAV-EXECUTE] Routing flight mode modification to integer ID: ${payload}`,
+          );
+          return await commandService.setMode(Number(payload));
+        }
+        console.error(
+          " [IPC-MAIN] Error: Received SET_MODE command missing numeric payload.",
+        );
+        break;
+
+      case "RTL":
+        // return await commandService.rtl();
+        return await commandService.setMode(6);
+
+      case "LAND":
+        // return await commandService.land();
+        return await commandService.setMode(9);
+
+      case "TAKEOFF":
+        // return await commandService.takeoff(payload?.alt);
+        const targetAlt = Number(payload?.alt);
+        // return await commandService.takeoff(payload?.alt);
+        return await commandService.takeoff(targetAlt);
+
+      case "GUIDED":
+        console.log(
+          "[GUIDED PROCESS] Shifting Autopilot to Guided Mode (4)...",
+        );
+        await commandService.setMode(4);
+
+        if (payload && payload.lat !== undefined && payload.lon !== undefined) {
+          const altitudeTarget = Number(payload.alt || 10);
+
+          // console.log(
+          //   `[GUIDED ROUTE] Transmitting destination coordinates targets: Lat=${payload.lat}, Lon=${payload.lon}, Alt=${altitudeTarget}`,
+          // )
+
+          // await commandService.takeoff(
+          //   // payload.lat,
+          //   // payload.lon,
+          //   altitudeTarget
+          // )
+
+          // Check if you passed a special flag indicating the vehicle is already flying
+          if (payload.isAirborne) {
+            console.log(
+              `[GUIDED ROUTE] Mid-air adjustment. Flying to map target point: Lat=${payload.lat}, Lon=${payload.lon}, Alt=${altitudeTarget}`,
+            );
+            await commandService.setGuidedPosition(
+              payload.lat,
+              payload.lon,
+              altitudeTarget,
+            );
+          } else {
+            console.log(
+              `[GUIDED ROUTE] Ground state takeoff initiated. Hovering vertically to target altitude: ${altitudeTarget}m`,
+            );
+
+            // Perform initial launch sequence safely in place without tracking horizontal drift
+            await commandService.takeoff(altitudeTarget);
+          }
+        }
+        break;
+
+      default:
+        console.warn(" [IPC-MAIN] Unhandled command profile key string:", cmd);
+    }
+  } catch (err) {
+    console.error(
+      ` [MAVLink-ERROR] Execution failure under command scope [${cmd}]:`,
+      err,
+    );
+  }
+});
+
+//////////////////////////////////////////////////////
+
+// ipcMain.on("disconnect-port", async () => {
+//   try {
+//     sendConnectionState("DISCONNECTING");
+
+//     if (telemetryEngine) {
+//       telemetryEngine.stop();
+//       telemetryEngine = null;
+//     }
+
+//     // 🎯 SAFETY FIX: Force the 50Hz transmission loop to turn off immediately!
+//     if (joystickService) {
+//       await joystickService.stop(); // Clears setInterval and sends a final safe neutral PWM packet
+//       joystickService.setCommandService(null); // Safely detach the old command pointer
+//     }
+
+//     if (activeConnection) {
+//       if (
+//         typeof activeConnection.drain === "function" &&
+//         activeConnection.isOpen &&
+//         !(activeConnection instanceof UdpTransport)
+//       ) {
+//         activeConnection.drain();
+//       }
+
+//       activeConnection.removeAllListeners();
+
+//       if (activeConnection.isOpen) {
+//         activeConnection.close(() => {
+//           activeConnection = null;
+//           paramService = null;
+//           commandService = null;
+//           actionService = null;
+
+//           // ⚠️ DO NOT set joystickService = null here anymore.
+//           // It is completely asleep and idle now, consuming 0% CPU.
+
+//           sendConnectionState("DISCONNECTED");
+//         });
+//       } else {
+//         activeConnection = null;
+//         sendConnectionState("DISCONNECTED");
+//       }
+//     } else {
+//       sendConnectionState("DISCONNECTED");
+//     }
+//   } catch (err) {
+//     console.error("Disconnection error:", err);
+//     sendConnectionState("ERROR");
+//   }
+// });
+//////////////////////////////////////
+////////////////////////////////
+////////////////////////////////////
+//////////////////////////////////////
+
+// import { app, BrowserWindow, ipcMain } from "electron";
+// import path from "node:path";
+// import { fileURLToPath } from "node:url";
+// import { SerialPort } from "serialport";
+// import { ParamService } from "./modules/paramServices.js";
+// import { getParamMeta, loadParamMeta } from "./modules/paramMeta.js";
+// import { CommandService } from "./modules/commandServices.js";
+// import { FlightActionService } from "./modules/flightActionService.js";
+// import { FlightState } from "./modules/flightState.js";
+// import { TelemetryEngine } from "./modules/telemetryEngine.js";
+// import { HardwareCheck } from "./modules/hardwareCheck.js";
+// import { UdpTransport } from "./modules/udpTransporter.js";
+// import { CalibrationService } from "./modules/calibrationService.js";
+// import { CompassCalibrationService } from "./modules/compassCalibrationService.js";
+// import { CompassMotCalibrationService } from "./modules/compassMotCalibration.js";
+// import { JoystickService } from "./modules/joystickService.js";
+
+// const __filename = fileURLToPath(import.meta.url);
+// const __dirname = path.dirname(__filename);
+
+// let win;
+// let activeConnection = null;
+// let heartbeatIntervalId = null;
+// let paramService;
+// let commandService;
+// let actionService;
+// let telemetryEngine = null;
+// let calibrationService;
+// let compassCalibrationService;
+// let compassMotCalibrationService;
+// let joystickService;
+
+// let connectionState = "DISCONNECTED";
+
+// function sendConnectionState(state) {
+//   connectionState = state;
+//   if (win && !win.isDestroyed()) {
+//     win.webContents.send("connection-state", state);
+//   }
+//   console.log(" Connection State:", state);
+// }
+
+// function createWindow() {
+//   win = new BrowserWindow({
+//     width: 1000,
+//     height: 800,
+//     webPreferences: {
+//       contextIsolation: true,
+//       nodeIntegration: false,
+//       preload: path.join(app.getAppPath(), "electron/main/preload.js"),
+//     },
+//   });
+
+//   if (app.isPackaged) {
+//     win.loadFile(path.join(app.getAppPath(), "dist/index.html"));
+//   } else {
+//     win.loadURL("http://localhost:5173");
+//     win.webContents.openDevTools();
+//   }
+// }
+
+// function attachConnectionEvents(connection) {
+//   const isUdp = connection instanceof UdpTransport;
+//   const label = isUdp ? "[MAIN-UDP]" : "[MAIN-SERIAL]";
+//   let isServicePipelineReady = false;
+
+//   connection.on("open", () => {
+//     console.log(
+//       `${label} Link physically established. Immediate telemetry routing active.`,
+//     );
+
+//     // 🚀 FIXED: Initialize flight state tracking structures instantly on hardware connection open
+//     const flightState = new FlightState(win);
+//     const hardwareCheck = new HardwareCheck(win);
+
+//     telemetryEngine = new TelemetryEngine({
+//       port: connection,
+//       win,
+//       flightState,
+//       hardwareCheck,
+//       paramService: null,
+//       commandService: null,
+//       calibrationService: null,
+//       compassCalibrationService: null,
+//       compassMotCalibrationService: null,
+//     });
+
+//     telemetryEngine.start();
+//     isServicePipelineReady = true;
+
+//     const heartbeatTimeout = setTimeout(() => {
+//       if (connectionState === "CONNECTING") {
+//         console.error(
+//           `${label} VERIFICATION TIMEOUT: No MAVLink packets matched within deadline.`,
+//         );
+//         sendConnectionState("ERROR");
+//         if (connection.isOpen) connection.close();
+//       }
+//     }, 15000);
+
+//     // FIXED: Central baseline data router loops raw buffers directly down into our active parsers
+//     const dataRouter = (data) => {
+//       if (isServicePipelineReady && telemetryEngine) {
+//         telemetryEngine.handleRawData(data);
+//       }
+
+//       if (connectionState === "CONNECTING") {
+//         const hasMavlink = data.some((byte) => byte === 0xfe || byte === 0xfd);
+
+//         if (hasMavlink) {
+//           console.log(
+//             `${label} MAVLINK VALIDATED! Orchestrating transaction modules...`,
+//           );
+//           clearTimeout(heartbeatTimeout);
+//           sendConnectionState("CONNECTED");
+
+//           // Initialize downstream control modules
+//           paramService = new ParamService(connection, win);
+//           commandService = new CommandService(connection, win);
+//           joystickService = new JoystickService(commandService);
+//           joystickService.start();
+
+//           calibrationService = new CalibrationService(commandService, win);
+//           compassCalibrationService = new CompassCalibrationService(
+//             commandService,
+//             win,
+//           );
+//           compassMotCalibrationService = new CompassMotCalibrationService(
+//             commandService,
+//             win,
+//           );
+//           actionService = new FlightActionService(
+//             commandService,
+//             paramService,
+//             flightState,
+//           );
+
+//           // Update active live object references into the running telemetry worker dynamically
+//           telemetryEngine.paramService = paramService;
+//           telemetryEngine.commandService = commandService;
+//           telemetryEngine.calibrationService = calibrationService;
+//           telemetryEngine.compassCalibrationService = compassCalibrationService;
+//           telemetryEngine.compassMotCalibrationService =
+//             compassMotCalibrationService;
+
+//           // Orchestrate Ground Control Station Heartbeats
+//           if (heartbeatIntervalId) clearInterval(heartbeatIntervalId);
+//           heartbeatIntervalId = setInterval(() => {
+//             if (connection.isOpen) {
+//               if (typeof commandService?.sendHeartbeat === "function") {
+//                 commandService.sendHeartbeat();
+//               } else {
+//                 const gcsHeartbeatBuffer = Buffer.from([
+//                   0xfe, 0x09, 0x00, 0xff, 0xbe, 0x00, 0x00, 0x00, 0x00, 0x00,
+//                   0x06, 0x03, 0x00, 0x00, 0x03, 0x1c, 0x5c,
+//                 ]);
+//                 connection.write(gcsHeartbeatBuffer);
+//               }
+//             }
+//           }, 1000);
+
+//           // Synchronize data stream transmission tables on hardware boot
+//           setTimeout(() => {
+//             console.log(
+//               `${label} Requesting MAVLink payload transmission channels...`,
+//             );
+//             commandService?.requestStreams();
+//           }, 100);
+//         }
+//       }
+//     };
+
+//     connection.on("data", dataRouter);
+//   });
+
+//   connection.on("close", () => {
+//     console.log(`${label} Connection handler layer detached.`);
+//     isServicePipelineReady = false;
+//     if (heartbeatIntervalId) clearInterval(heartbeatIntervalId);
+//     sendConnectionState("DISCONNECTED");
+//   });
+
+//   connection.on("error", (err) => {
+//     console.error(`${label} Hardware link interface error fired:`, err);
+//     sendConnectionState("ERROR");
+//   });
+// }
+// // function attachConnectionEvents(connection) {
+// //   const isUdp = connection instanceof UdpTransport;
+// //   const label = isUdp ? "[MAIN-UDP]" : "[MAIN-SERIAL]";
+// //   let isServicePipelineReady = false;
+
+// //   connection.on("open", () => {
+// //     console.log(
+// //       `${label} Link physically established. Immediate telemetry routing active.`,
+// //     );
+
+// //     const flightState = new FlightState(win);
+// //     const hardwareCheck = new HardwareCheck(win);
+
+// //     telemetryEngine = new TelemetryEngine({
+// //       port: connection,
+// //       win,
+// //       flightState,
+// //       hardwareCheck,
+// //       paramService: null,
+// //       commandService: null,
+// //       calibrationService: null,
+// //       compassCalibrationService: null,
+// //       compassMotCalibrationService: null,
+// //     });
+
+// //     telemetryEngine.start();
+// //     isServicePipelineReady = true;
+
+// //     const heartbeatTimeout = setTimeout(() => {
+// //       if (connectionState === "CONNECTING") {
+// //         console.error(
+// //           `${label} VERIFICATION TIMEOUT: No MAVLink packets matched within deadline.`,
+// //         );
+// //         sendConnectionState("ERROR");
+// //         if (connection.isOpen) connection.close();
+// //       }
+// //     }, 15000);
+
+// //     const dataRouter = (data) => {
+// //       if (isServicePipelineReady && telemetryEngine) {
+// //         telemetryEngine.handleRawData(data);
+// //       }
+
+// //       if (connectionState === "CONNECTING") {
+// //         const hasMavlink = data.some((byte) => byte === 0xfe || byte === 0xfd);
+
+// //         if (hasMavlink) {
+// //           console.log(
+// //             `${label} MAVLINK VALIDATED! Orchestrating transaction modules...`,
+// //           );
+// //           clearTimeout(heartbeatTimeout);
+// //           sendConnectionState("CONNECTED");
+
+// //           // Initialize downstream control modules
+// //           paramService = new ParamService(connection, win);
+// //           commandService = new CommandService(connection, win);
+// //           joystickService = new JoystickService(commandService);
+// //           joystickService.start();
+
+// //           calibrationService = new CalibrationService(commandService, win);
+// //           compassCalibrationService = new CompassCalibrationService(commandService, win);
+// //           compassMotCalibrationService = new CompassMotCalibrationService(commandService, win);
+// //           actionService = new FlightActionService(commandService, paramService, flightState);
+
+// //           // Update active live object references into the running telemetry worker dynamically
+// //           telemetryEngine.paramService = paramService;
+// //           telemetryEngine.commandService = commandService;
+// //           telemetryEngine.calibrationService = calibrationService;
+// //           telemetryEngine.compassCalibrationService = compassCalibrationService;
+// //           telemetryEngine.compassMotCalibrationService = compassMotCalibrationService;
+
+// //           // Orchestrate Ground Control Station Heartbeats
+// //           if (heartbeatIntervalId) clearInterval(heartbeatIntervalId);
+// //           heartbeatIntervalId = setInterval(() => {
+// //             if (connection.isOpen) {
+// //               if (typeof commandService?.sendHeartbeat === "function") {
+// //                 commandService.sendHeartbeat();
+// //               } else {
+// //                 const gcsHeartbeatBuffer = Buffer.from([
+// //                   0xfe, 0x09, 0x00, 0xff, 0xbe, 0x00, 0x00, 0x00, 0x00, 0x00,
+// //                   0x06, 0x03, 0x00, 0x00, 0x03, 0x1c, 0x5c,
+// //                 ]);
+// //                 connection.write(gcsHeartbeatBuffer);
+// //               }
+// //             }
+// //           }, 1000);
+
+// //           // --- 🚀 THE FIX: DELAYED STREAM REQUESTS ---
+// //           // This allows the flight controller to finish sending its startup logs completely
+// //           setTimeout(() => {
+// //             console.log(
+// //               `${label} Safe buffer period reached. Requesting active payload streams...`,
+// //             );
+// //             commandService?.requestStreams();
+// //           }, 1500); // 1.5 seconds is ideal for hardware state stabilization
+// //         }
+// //       }
+// //     };
+
+// //     connection.on("data", dataRouter);
+// //   });
+
+// //   connection.on("close", () => {
+// //     console.log(`${label} Connection handler layer detached.`);
+// //     isServicePipelineReady = false;
+// //     if (heartbeatIntervalId) clearInterval(heartbeatIntervalId);
+// //     sendConnectionState("DISCONNECTED");
+// //   });
+
+// //   connection.on("error", (err) => {
+// //     console.error(`${label} Hardware link interface error fired:`, err);
+// //     sendConnectionState("ERROR");
+// //   });
+// // }
+
+// // --- IPC INFRASTRUCTURE BRIDGE REGISTRATIONS ---
+
+// app.whenReady().then(async () => {
+//   createWindow();
+//   await loadParamMeta();
+//   await new Promise((r) => setTimeout(r, 500));
+// });
+
+// ipcMain.handle("get-ports", async () => {
+//   const ports = await SerialPort.list();
+//   return ports.map((p) => ({
+//     path: p.path,
+//     name: p.friendlyName || p.manufacturer || "Unknown",
+//   }));
+// });
+
+// SerialPort.list().then(() => {
+//   process.on("uncaughtException", (err) => {
+//     if (err.message.includes("removed")) {
+//       console.log(" Hardware configuration modified via USB event connection.");
+//       if (win && !win.isDestroyed()) {
+//         win.webContents.send("usb-hardware-change");
+//       }
+//     }
+//   });
+// });
+
+// ipcMain.on("connect-port", async (event, payload) => {
+//   try {
+//     const { type, path, baudRate, localPort } = payload || {};
+//     sendConnectionState("CONNECTING");
+
+//     if (type === "UDP") {
+//       console.log(` Initializing UDP Transport on port ${localPort}`);
+//       activeConnection = new UdpTransport({ localPort });
+//       attachConnectionEvents(activeConnection);
+//       activeConnection.open();
+//     } else {
+//       if (!path || typeof path !== "string") {
+//         throw new Error("Invalid serial port configuration path.");
+//       }
+//       activeConnection = new SerialPort({
+//         path,
+//         baudRate: baudRate || 115200,
+//       });
+//       attachConnectionEvents(activeConnection);
+//     }
+//   } catch (err) {
+//     console.error("Link interface configuration exception:", err);
+//     sendConnectionState("ERROR");
+//   }
+// });
+
+// ipcMain.on("request-params", () => {
+//   console.log(" request-params channel target intercepted");
+//   if (paramService) paramService.requestAll();
+// });
+
+// ipcMain.on("set-param", (_, payload) => {
+//   if (paramService) paramService.setParam(payload);
+// });
+
+// ipcMain.handle("get-param-meta", () => {
+//   return getParamMeta();
+// });
+
+// ipcMain.on("disconnect-port", async () => {
+//   try {
+//     sendConnectionState("DISCONNECTING");
+
+//     if (telemetryEngine) {
+//       telemetryEngine.stop();
+//       telemetryEngine = null;
+//     }
+//     if (joystickService) {
+//       await joystickService.stop();
+//       joystickService = null;
+//     }
+
+//     if (activeConnection) {
+//       if (
+//         typeof activeConnection.drain === "function" &&
+//         activeConnection.isOpen &&
+//         !(activeConnection instanceof UdpTransport)
+//       ) {
+//         activeConnection.drain();
+//       }
+
+//       activeConnection.removeAllListeners();
+
+//       if (activeConnection.isOpen) {
+//         activeConnection.close(() => {
+//           activeConnection = null;
+//           paramService = null;
+//           commandService = null;
+//           actionService = null;
+//           sendConnectionState("DISCONNECTED");
+//         });
+//       } else {
+//         activeConnection = null;
+//         sendConnectionState("DISCONNECTED");
+//       }
+//     } else {
+//       sendConnectionState("DISCONNECTED");
+//     }
+//   } catch (err) {
+//     console.error("Disconnection tracking pipeline breakdown:", err);
+//     sendConnectionState("ERROR");
+//   }
+// });
+
+// // ⚡ FIXED: Consolidated unified hardware command router matrix
+// ipcMain.on("flight-command", async (_, data) => {
+//   console.log(" [IPC-MAIN] Navigation packet command data received:", data);
+//   if (!actionService || !commandService) {
+//     console.error(
+//       " [IPC-MAIN] Downstream mission execution microservices are uninitialized.",
+//     );
+//     return;
+//   }
+
+//   const { cmd, payload } = data;
+
+//   try {
+//     switch (cmd) {
+//       case "ARM":
+//         return await actionService.arm();
+//       case "DISARM":
+//         return await actionService.disarm();
+//       case "RTL":
+//         return await actionService.rtl();
+//       case "LAND":
+//         return await actionService.land();
+//       case "TAKEOFF":
+//         return await actionService.takeoff(payload?.alt);
+//       case "GUIDED":
+//         return await actionService.flyTo(
+//           payload?.lat,
+//           payload?.lon,
+//           payload?.alt,
+//         );
+
+//       case "AUTO":
+//         return await actionService.setMode("AUTO");
+
+//       case "STABILIZE":
+//         return await actionService.setMode("STABILIZE");
+
+//       case "SET_MODE":
+//         if (payload !== undefined && payload !== null) {
+//           return await commandService.setMode(Number(payload));
+//         }
+//         break;
+
+//       default:
+//         console.warn(
+//           " [IPC-MAIN] Unhandled command string identifier token:",
+//           cmd,
+//         );
+//     }
+//   } catch (err) {
+//     console.error(
+//       ` [MAVLink-EXEC-ERROR] Execution failure under command loop scope [${cmd}]:`,
+//       err,
+//     );
+//   }
+// });
+
+// ipcMain.on("start-accel-calibration", async () => {
+//   if (calibrationService) await calibrationService.start();
+// });
+
+// ipcMain.on("confirm-accel-position", async () => {
+//   if (calibrationService) await calibrationService.confirmPosition();
+// });
+
+// ipcMain.on("start-compass-calibration", async () => {
+//   await compassCalibrationService?.start();
+// });
+
+// ipcMain.on("cancel-compass-calibration", async () => {
+//   await compassCalibrationService?.cancel();
+// });
+
+// ipcMain.on("start-compassmot-calibration", async () => {
+//   await compassMotCalibrationService?.startCompassMot();
+// });
+
+// ipcMain.on("set-throttle", async (_, throttlePercentage) => {
+//   await compassMotCalibrationService?.handleUserThrottleInput(
+//     throttlePercentage,
+//   );
+// });
+
+// ipcMain.on("stop-compassmot-calibration", async () => {
+//   await compassMotCalibrationService?.stopCompassMot();
+// });
+
+// ipcMain.on("restart-FC", async () => {
+//   await commandService?.rebootFC();
+// });
+
+// ipcMain.on("joystick-enable", () => {
+//   joystickService?.start();
+// });
+
+// ipcMain.on("joystick-disable", () => {
+//   joystickService?.stop();
+// });
+
+// ipcMain.on("joystick-update", (_, joystick) => {
+//   joystickService?.updateAxes(joystick);
+// });
+
+// ipcMain.on("joystick-update-config", (_, config) => {
+//   if (joystickService) joystickService.setConfiguration(config);
+// });
+
+
+
+
+
+preload.js ???????????
+
+// import { contextBridge, ipcRenderer } from "electron";
+const { contextBridge, ipcRenderer } = require("electron");
+
+contextBridge.exposeInMainWorld("electron", {
+  getPorts: () => ipcRenderer.invoke("get-ports"),
+
+  connectPort: (data) => ipcRenderer.send("connect-port", data),
+
+  requestParams: () => ipcRenderer.send("request-params"),
+
+  sendJoystick: (data) => ipcRenderer.send("joystick-update", data),
+
+  enableJoystick: () => ipcRenderer.send("joystick-enable"),
+
+  disableJoystick: () => ipcRenderer.send("joystick-disable"),
+
+  updateJoystickConfig: (config) =>
+    ipcRenderer.send("joystick-update-config", config),
+
+  startAccelCalibration: () => ipcRenderer.send("start-accel-calibration"),
+
+  confirmAccelPosition: () => ipcRenderer.send("confirm-accel-position"),
+
+  startCompassMotCalibration: () =>
+    ipcRenderer.send("start-compassmot-calibration"),
+
+  stopCompassMot: () => ipcRenderer.send("stop-compassmot-calibration"),
+
+  setThrottle: (throttlePercentage) =>
+    ipcRenderer.send("set-throttle", throttlePercentage),
+
+  restartFc: () => ipcRenderer.send("restart-FC"),
+
+  onCompassMotStatus: (cb) => {
+    const handler = (_, data) => cb(data);
+
+    ipcRenderer.on("compassmot-status", handler);
+
+    return () => ipcRenderer.removeListener("compassmot-status", handler);
+  },
+
+  onAccelCalibrationStatus: (cb) => {
+    const handler = (_, data) => cb(data);
+
+    ipcRenderer.on("accel-calibration-status", handler);
+
+    return () =>
+      ipcRenderer.removeListener("accel-calibration-status", handler);
+  },
+
+  startCompassCalibration: () => ipcRenderer.send("start-compass-calibration"),
+
+  cancelCompassCalibration: () =>
+    ipcRenderer.send("cancel-compass-calibration"),
+
+  onCompassCalibrationStatus: (cb) => {
+    const handler = (_, data) => cb(data);
+
+    ipcRenderer.on("compass-calibration-status", handler);
+
+    return () =>
+      ipcRenderer.removeListener("compass-calibration-status", handler);
+  },
+
+  onParam: (cb) => {
+    const handler = (_, data) => cb(data);
+    ipcRenderer.on("param", handler);
+
+    return () => {
+      ipcRenderer.removeListener("param", handler);
+    };
+  },
+
+  onParamComplete: (cb) => {
+    const handler = (_, data) => cb(data);
+    ipcRenderer.on("param-complete", handler);
+
+    return () => {
+      ipcRenderer.removeListener("param-complete", handler);
+    };
+  },
+
+  setParam: (data) => ipcRenderer.send("set-param", data),
+
+  getParamMeta: () => ipcRenderer.invoke("get-param-meta"),
+
+  onConnectionState: (cb) => {
+    const handler = (_, state) => cb(state);
+
+    ipcRenderer.on("connection-state", handler);
+
+    return () => {
+      ipcRenderer.removeListener("connection-state", handler);
+    };
+  },
+
+  onTelemetry: (cb) => {
+    const handler = (_, data) => cb(data);
+    ipcRenderer.on("telemetry", handler);
+
+    // cleanup function (important for React)
+    return () => {
+      ipcRenderer.removeListener("telemetry", handler);
+    };
+  },
+
+  onHardwareStatus: (cb) => {
+    const handler = (_, data) => cb(data);
+
+    ipcRenderer.on("hardware-status", handler);
+
+    //cleanup function
+    return () => {
+      ipcRenderer.removeListener("hardware-status", handler);
+    };
+  },
+
+  onParamSetResult: (cb) => {
+    const handler = (_, data) => cb(data);
+    ipcRenderer.on("param-set-result", handler);
+
+    return () => ipcRenderer.removeListener("param-set-result", handler);
+  },
+
+  disconnectPort: () => ipcRenderer.send("disconnect-port"),
+
+  flightCommand: (cmd, payload) =>
+    ipcRenderer.send("flight-command", { cmd, payload }),
+
+  onCommandAck: (cb) => {
+    const handler = (_, data) => cb(data);
+    ipcRenderer.on("command-ack", handler);
+    return () => ipcRenderer.removeListener("command-ack", handler);
+  },
+
+  flight: {
+    arm: () => ipcRenderer.send("flight-command", { cmd: "ARM" }),
+    disarm: () => ipcRenderer.send("flight-command", { cmd: "DISARM" }),
+
+    rtl: () => ipcRenderer.send("flight-command", { cmd: "RTL" }),
+    land: () => ipcRenderer.send("flight-command", { cmd: "LAND" }),
+    loiter: () => ipcRenderer.send("flight-command", { cmd: "LOITER" }),
+    guided: () => ipcRenderer.send("flight-command", { cmd: "GUIDED" }),
+    stabilize: () => ipcRenderer.send("flight-command", { cmd: "STABILIZE" }),
+    takeoff: (alt) =>
+      ipcRenderer.send("flight-command", {
+        cmd: "TAKEOFF",
+        payload: { alt },
+      }),
+    flyTo: (lat, lon, alt) =>
+      ipcRenderer.send("flight-command", {
+        cmd: "GUIDED",
+        payload: { lat, lon, alt },
+      }),
+  },
+});
+
+
+
+commandService.js ???????????
+
+import {
+  common,
+  send,
+  ardupilotmega,
+  minimal,
+  MavLinkProtocolV2,
+} from "node-mavlink";
+
+const gcsProtocolEngine = new MavLinkProtocolV2();
+gcsProtocolEngine.sysid = 255;
+gcsProtocolEngine.compid = 190;
+
+export class CommandService {
+  constructor(port, win) {
+    this.port = port;
+    this.win = win;
+    this.isVehicleArmed = false;
+    this.pendingCommands = new Map();
+    this.targetSystem = 1;
+    this.targetComponent = 1;
+  }
+
+  // handleHeartbeat(heartbeatMsg) {
+  //   // MAV_MODE_FLAG_SAFETY_ARMED = 128
+  //   this.isVehicleArmed = (heartbeatMsg.baseMode & 128) !== 0;
+  //   console.log(this.isVehicleArmed);
+  // }
+
+  handleHeartbeat(heartbeatMsg) {
+    // node-mavlink exposes XML properties using camelCase (baseMode), NOT snake_case (base_mode)
+    const baseModeValue = heartbeatMsg.baseMode ?? 0;
+    console.log(baseModeValue);
+
+    // MAV_MODE_FLAG_SAFETY_ARMED = 128
+    this.isVehicleArmed = (baseModeValue & 128) !== 0;
+  }
+
+  async sendAck() {
+    try {
+      const msg = new common.CommandAck();
+
+      ((msg.targetSystem = this.targetSystem),
+        (msg.targetComponent = this.targetComponent));
+
+      ((msg.command = 241), (msg.result = 4));
+    } catch (error) {
+      console.error("[Error sending command_ack to the drone]", error);
+    }
+  }
+
+  async sendRCOverride({ roll, pitch, throttle, yaw }) {
+    const msg = new common.RcChannelsOverride();
+
+    msg.targetSystem = this.targetSystem;
+    msg.targetComponent = this.targetComponent;
+
+    msg.chan1Raw = roll; // Aileron
+    msg.chan2Raw = pitch; // Elevator
+    msg.chan3Raw = throttle; // Throttle
+    msg.chan4Raw = yaw; // Rudder
+
+    msg.chan5Raw = 65535;
+    msg.chan6Raw = 65535;
+    msg.chan7Raw = 65535;
+    msg.chan8Raw = 65535;
+
+    const now = Date.now();
+    if (!this.lastRcLogTime || now - this.lastRcLogTime > 500) {
+      console.log(
+        `[COMMAND_SERVICE INTERCEPT]  CH1(Roll): ${roll}μs | CH2(Pitch): ${pitch}μs | CH3(Throt): ${throttle}μs | CH4(Yaw): ${yaw}μs`,
+      );
+      this.lastRcLogTime = now;
+    }
+
+    await send(this.port, msg, gcsProtocolEngine);
+  }
+
+  async sendRcOverride2({ roll, pitch, yaw, throttle }) {
+    const msg = new common.RcChannelsOverride(
+      this.targetSystem,
+      this.targetComponent,
+
+      axisToPwm(roll), // ch1
+      axisToPwm(-pitch), // ch2
+      throttleToPwm(throttle), // ch3
+      axisToPwm(yaw), // ch4
+
+      65535,
+      65535,
+      65535,
+      65535,
+    );
+
+    this.sendMessage(msg);
+  }
+
+  async rebootFC() {
+    try {
+      const msg = new common.CommandLong();
+
+      msg.command = 246;
+      msg._param1 = 1;
+      msg._param2 = 0;
+      msg._param3 = 0;
+      msg._param4 = 0;
+      msg._param5 = 0;
+      msg._param6 = 0;
+      msg._param7 = 0;
+
+      await send(this.port, msg, gcsProtocolEngine);
+    } catch (error) {
+      console.error("Error in sending  the reboot command to the drone", error);
+    }
+  }
+
+  async setThrottle(percent) {
+    try {
+      // Convert 0-100% -> PWM 1000-2000
+      const pwm = Math.round(1000 + percent * 10);
+
+      const msg = new common.RcChannelsOverride();
+
+      msg.targetSystem = this.targetSystem;
+      msg.targetComponent = this.targetComponent;
+
+      //  all channels unchanged
+      msg.chan1Raw = 65535;
+      msg.chan2Raw = 65535;
+
+      // Throttle channel
+      msg.chan3Raw = pwm;
+
+      msg.chan4Raw = 65535;
+      msg.chan5Raw = 65535;
+      msg.chan6Raw = 65535;
+      msg.chan7Raw = 65535;
+      msg.chan8Raw = 65535;
+
+      await send(this.port, msg, gcsProtocolEngine);
+
+      console.log(`[THROTTLE] percent=${percent}% pwm=${pwm}`);
+    } catch (err) {
+      console.error("[THROTTLE ERROR]", err);
+    }
+  }
+
+  async sendCompassMotCancel() {
+    try {
+      const ack = new common.CommandAck();
+
+      ack.command = 241; // MAV_CMD_PREFLIGHT_CALIBRATION
+      ack.result = 0; // MAV_RESULT_ACCEPTED
+
+      console.log(
+        "TX",
+        ack.constructor.name,
+        "command=",
+        ack.command,
+        "result=",
+        ack.result,
+      );
+
+      await send(this.port, ack, gcsProtocolEngine);
+
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      console.log(
+        "TX",
+        ack.constructor.name,
+        "command=",
+        ack.command,
+        "result=",
+        ack.result,
+      );
+
+      await send(this.port, ack, gcsProtocolEngine);
+
+      console.log("COMPASSMOT CANCEL ACK SENT");
+    } catch (err) {
+      console.error(err);
+    }
+  }
+
+  // async sendCompassMotCancel() {
+  //   try {
+  //     console.log(" COMPASSMOT: Sending cancellation command ...");
+
+  //     await this.releaseThrottleOverride();
+  //     console.log("runnedTheReleasedThrottle");
+
+  //     const msg = new common.CommandLong();
+
+  //
+  // msg.targetSystem = this.targetSystem
+  //     msg.targetComponent = this.targetComponent;
+  //     msg.command = 241; // MAV_CMD_PREFLIGHT_CALIBRATION
+
+  //     // Zeroing all parameters tells the active task loop manager to immediately stop
+  //     msg._param1 = 0;
+  //     msg._param2 = 0;
+  //     msg._param3 = 0;
+  //     msg._param4 = 0;
+  //     msg._param5 = 0;
+  //     msg._param6 = 0; // 0 forces CompassMot compilation registers to drop
+  //     msg._param7 = 0;
+
+  //     await send(this.port, msg, gcsProtocolEngine);
+  //     console.log("COMPASSMOT: Calibration cancellation command transmitted.");
+  //   } catch (error) {
+  //     console.error(
+  //       "COMPASSMOT: Failed to safely cancel calibration sequence:",
+  //       error,
+  //     );
+  //   }
+  // }
+
+  async releaseThrottleOverride() {
+    try {
+      const msg = new common.RcChannelsOverride();
+
+      msg.targetSystem = this.targetSystem;
+      msg.targetComponent = this.targetComponent;
+
+      msg.chan1Raw = 65535;
+      msg.chan2Raw = 65535;
+      msg.chan3Raw = 1000; //  In ArduPilot, setting a channel to 0 unlocks the override lock condition instantly
+      msg.chan4Raw = 65535;
+      msg.chan5Raw = 65535;
+      msg.chan6Raw = 65535;
+      msg.chan7Raw = 65535;
+      msg.chan8Raw = 65535;
+
+      await send(this.port, msg, gcsProtocolEngine);
+      console.log(
+        " [SAFETY]: Throttle channel override released back to physical RC Transmitter control.",
+      );
+    } catch (err) {
+      console.error(
+        " [SAFETY]: Failed to release throttle tracking link override:",
+        err,
+      );
+    }
+  }
+
+  async sendHeartbeat() {
+    try {
+      if (!this.port || !this.port.isOpen) return;
+
+      const msg = new minimal.Heartbeat();
+      msg.type = 6;
+      msg.autopilot = 8;
+      msg.baseMode = 0;
+      msg.customMode = 0;
+      msg.systemStatus = 4;
+
+      await send(this.port, msg, gcsProtocolEngine);
+
+      // console.log("gcs heartbeat sent successfully with SystemID 255");
+
+      // Pass the protocol to stamp the binary header bytes with 255
+      await send(this.port, msg, gcsProtocolEngine);
+      // await send(this.port, msg);
+      // console.log("gcs heartbeat sent with SystemID 255");
+    } catch (error) {
+      console.error("Failure sending heartbeat:", error);
+    }
+  }
+
+  async startCompassMotCalibration() {
+    console.log(" COMPASSMOT: Sending start command");
+
+    const msg = new common.CommandLong();
+
+    msg.targetSystem = this.targetSystem;
+    msg.targetComponent = this.targetComponent;
+
+    msg.command = 241; // MAV_CMD_PREFLIGHT_CALIBRATION
+
+    msg._param1 = 0;
+    msg._param2 = 0;
+    msg._param3 = 0;
+    msg._param4 = 0;
+    msg._param5 = 0;
+    msg._param6 = 1; // CompassMot
+    msg._param7 = 0;
+
+    console.log(" COMPASSMOT: command=241 param6=1");
+
+    await send(this.port, msg, gcsProtocolEngine);
+
+    console.log(" COMPASSMOT: command sent");
+  }
+
+  async startAccelCalibration() {
+    try {
+      const msg = new common.CommandLong();
+
+      msg.targetSystem = this.targetSystem;
+
+      msg.targetComponent = this.targetComponent;
+
+      msg.command = 241;
+
+      msg.confirmation = 0;
+
+      msg._param1 = 0;
+      msg._param2 = 0;
+      msg._param3 = 0;
+      msg._param4 = 0;
+      msg._param5 = 1;
+      msg._param6 = 0;
+      msg._param7 = 0;
+
+      // await send(this.port, msg);
+      await send(this.port, msg, gcsProtocolEngine);
+    } catch (error) {
+      console.log(error);
+    }
+  }
+
+  sendAccelPosition(position) {
+    const msg = new common.CommandLong();
+
+    msg.targetSystem = this.targetSystem;
+
+    msg.targetComponent = this.targetComponent;
+
+    msg.command = 42429;
+
+    msg.confirmation = 1;
+
+    msg._param1 = position;
+    msg._param2 = 0;
+    msg._param3 = 0;
+    msg._param4 = 0;
+    msg._param5 = 0;
+    msg._param6 = 0;
+    msg._param7 = 0;
+
+    send(this.port, msg, gcsProtocolEngine);
+  }
+
+  async startCompassCalibration() {
+    const msg = new common.CommandLong();
+
+    msg.targetSystem = this.targetSystem;
+    msg.targetComponent = this.targetComponent;
+
+    msg.command = 42424;
+    msg._param1 = 0;
+    msg._param2 = 1;
+    msg._param3 = 1;
+    msg._param4 = 0;
+
+    this.pendingCommands.set(42424, {
+      command: 42424,
+      time: Date.now(),
+    });
+
+    // await send(this.port, msg);
+    await send(this.port, msg, gcsProtocolEngine);
+  }
+
+  async cancelCompassCalibration() {
+    const msg = new common.CommandLong();
+
+    msg.targetSystem = this.targetSystem;
+    msg.targetComponent = this.targetComponent;
+
+    msg.command = 42425;
+
+    await send(this.port, msg, gcsProtocolEngine);
+  }
+
+  async requestStreams() {
+    const msg = new common.RequestDataStream();
+
+    msg.targetSystem = this.targetSystem;
+    msg.targetComponent = this.targetComponent;
+
+    msg.reqStreamId = 0; // all streams
+    msg.reqMessageRate = 50;
+    msg.startStop = 1;
+
+    // await send(this.port, msg);
+    await send(this.port, msg, gcsProtocolEngine);
+  }
+
+  // async requestStatusText() {
+  //   const streamRequest = new common.RequestMessageCommand();
+
+  //   streamRequest.targetSystem = 1;
+  //   streamRequest.targetComponent = 1;
+
+  //   streamRequest.messageId = 253; // 253  MAVLink ID for STATUSTEXT
+
+  //   console.log("requestStatusText");
+
+  //   await send(this.port, streamRequest);
+  // }
+
+  async setGuidedPosition(lat, lon, alt = 10) {
+    console.log("setGuidedPosition Triggered");
+    const msg = new common.SetPositionTargetGlobalInt();
+
+    msg.timeBootMs = Date.now() & 0xffffffff;
+    msg.targetSystem = this.targetSystem;
+    msg.targetComponent = this.targetComponent;
+
+    msg.coordinateFrame = 3;
+
+    msg.latInt = Math.round(lat * 1e7);
+    msg.lonInt = Math.round(lon * 1e7);
+
+    msg.alt = alt;
+
+    msg.typeMask = 0b0000111111000111;
+
+    // Initialize unmapped mandatory MAVLink float payload parameters
+    msg.vx = 0;
+    msg.vy = 0;
+    msg.vz = 0;
+    msg.afx = 0;
+    msg.afy = 0;
+    msg.afz = 0;
+    msg.yaw = 0;
+    msg.yawRate = 0;
+
+    await send(this.port, msg, gcsProtocolEngine);
+    console.log(
+      `[MAVLINK REPOSITON] Dispatched target point : Lat=${lat}, Lon=${lon}, Alt=${alt}m`,
+    );
+  }
+
+  async repositionTo(lat, lon, alt = 10) {
+    try {
+      // const msg = new common.CommandLong();
+      const msg = new common.CommandInt();
+
+      msg.targetSystem = this.targetSystem;
+      msg.targetComponent = this.targetComponent;
+      msg.frame = 6;
+      msg.command = 192;
+      // msg.confirmation = 0;
+
+      // msg._param1 = 0 ;
+      // msg._param2 = 0;
+      // msg._param3 = 0;
+      // msg._param4 = 0;
+      // msg._param5 = lat;
+      // msg._param6 = lon;
+      // msg._param7 = alt;
+
+      msg.autocontinue = 0;
+      msg._param1 = -1;
+      msg._param2 = 0;
+      msg._param3 = 0;
+      msg._param4 = NaN;
+      msg._param5 = Math.round(lat * 1e7);
+      msg._param6 = Math.round(lon * 1e7);
+      msg._param7 = alt;
+
+      await send(this.port, msg, gcsProtocolEngine);
+      console.log(
+        `[MAVLINK REPOSITON] Dispatched target point : Lat=${lat}, Lon=${lon}, Alt=${alt}m`,
+      );
+    } catch (error) {
+      console.error(
+        "[MAVLINK REPOSITION ERROR] Failed to transmit command structure:",
+        error,
+      );
+    }
+  }
+
+  // async takeoff(lat, lon, alt = 10, pitch = 0, yaw = NaN) {
+  //   try {
+  //     const msg = new common.CommandInt();
+
+  //     msg.targetSystem = this.targetSystem;
+  //     msg.targetComponent = this.targetComponent;
+  //     msg.frame = 1; // MAV_FRAME_GLOBAL_RELATIVE_ALT_INT
+  //     msg.command = 22; // MAV_CMD_NAV_TAKEOFF
+  //     msg.autocontinue = 0;
+
+  //     msg._param1 = pitch; // Minimum / desired pitch
+  //     msg._param2 = 0;     // Empty
+  //     msg._param3 = 0;     // Flags (NAV_TAKEOFF_FLAGS)
+  //     msg._param4 = yaw;   // Yaw angle (NaN uses current heading mode)
+  //     // msg._param5 = Math.round(lat * 1e7); // Latitude scaled to int32
+  //     // msg._param6 = Math.round(lon * 1e7); // Longitude scaled to int32
+  //     msg._param5 = lat === 0 ? 0 : Math.round(lat * 1e7);
+  //     msg._param6 = lon === 0 ? 0 : Math.round(lon * 1e7);
+  //     msg._param7 = alt;   // Altitude (float)
+
+  //     await send(this.port, msg, gcsProtocolEngine);
+  //     console.log(
+  //       `[MAVLINK TAKEOFF] Dispatched takeoff target: Lat=${lat}, Lon=${lon}, Alt=${alt}m`,
+  //     );
+  //   } catch (error) {
+  //     console.error(
+  //       "[MAVLINK TAKEOFF ERROR] Failed to transmit command structure:",
+  //       error,
+  //     );
+  //   }
+  // }
+
+  async takeoff(alt, ignoreHorizontalLock = false) {
+    try {
+      const msg = new common.CommandLong();
+      msg.targetSystem = this.targetSystem;
+      msg.targetComponent = this.targetComponent;
+      msg.frame = 1; // MAV_FRAME_GLOBAL_RELATIVE_ALT_INT
+      msg.command = 22; // MAV_CMD_NAV_TAKEOFF
+      msg.autocontinue = 0;
+
+      msg._param1 = 0;
+      msg._param2 = 0;
+      msg._param3 = ignoreHorizontalLock ? 1 : 0;
+      msg._param4 = NaN;
+      msg._param5 = 0;
+      msg._param6 = 0;
+      msg._param7 = alt;
+
+      await send(this.port, msg, gcsProtocolEngine);
+    } catch (error) {
+      console.error(
+        "[MAVLINK TAKEOFF ERROR] Failed to transmit command structure:",
+        error,
+      );
+    }
+  }
+
+  async missionStart() {
+    const msg = new common.CommandLong();
+
+    msg.targetSystem = this.targetSystem;
+    msg.targetComponent = this.targetComponent;
+    msg.command = 300; // MISSION_START
+
+    await send(this.port, msg, gcsProtocolEngine);
+  }
+  async setVelocity(vx, vy, vz) {
+    const msg = new common.SetPositionTargetLocalNed();
+
+    msg.targetSystem = this.targetSystem;
+    msg.targetComponent = this.targetComponent;
+
+    msg.vx = vx;
+    msg.vy = vy;
+    msg.vz = vz;
+
+    msg.typeMask = 0b0000111111000111; // position ignored
+
+    await send(this.port, msg, gcsProtocolEngine);
+  }
+  async setYaw(angle) {
+    const msg = new common.CommandLong();
+
+    msg.targetSystem = this.targetSystem;
+    msg.targetComponent = this.targetComponent;
+
+    msg.command = 115; // CONDITION_YAW
+    msg.param1 = angle;
+
+    await send(this.port, msg, gcsProtocolEngine);
+  }
+
+  async toggleArm() {
+    if (this.isVehicleArmed) {
+      console.log("Vehicle is armed. Sending disarm command...");
+      await this.disarm();
+    } else {
+      console.log("Vehicle is disarmed. Sending arm command...");
+      await this.arm();
+    }
+  }
+
+  async arm() {
+    const msg = new common.CommandLong();
+
+    msg.command = 400; // MAV_CMD_COMPONENT_ARM_DISARM
+    msg._param1 = 1; // arm
+    msg.confirmation = 0;
+    msg.targetSystem = this.targetSystem;
+    msg.targetComponent = this.targetComponent;
+
+    const commandId = 400;
+
+    this.pendingCommands.set(commandId, {
+      command: 400,
+      time: Date.now(),
+    });
+
+    await send(this.port, msg, gcsProtocolEngine);
+
+    console.log("Drone Arm Successfull");
+
+    console.log(
+      `[INFO] [MAVLINK_TX] Sending CMD_LONG (${msg.command}). Params: P1=${msg._param1}, P2=${msg._param2}`,
+    );
+  }
+
+  async disarm() {
+    const msg = new common.CommandLong();
+
+    msg.command = 400;
+    msg._param1 = 0; // disarm
+    msg._param2 = 0;
+    msg.confirmation = 0;
+    msg.targetSystem = this.targetSystem;
+    msg.targetComponent = this.targetComponent;
+
+    await send(this.port, msg, gcsProtocolEngine);
+    console.log("Drone Disarmed Successfull");
+
+    console.log(
+      `[INFO] [MAVLINK_TX] Sending CMD_LONG (${msg.command}). Params: P1=${msg._param1}, P2=${msg._param2}`,
+    );
+  }
+
+  async land() {
+    const msg = new common.CommandLong();
+
+    msg.targetSystem = this.targetSystem;
+    msg.targetComponent = this.targetComponent;
+
+    msg.command = 21; // LAND
+    msg.param1 = 0;
+
+    await send(this.port, msg, gcsProtocolEngine);
+  }
+
+  async takeoff(altitude = 5) {
+    const msg = new common.CommandLong();
+
+    msg.command = 22; // MAV_CMD_NAV_TAKEOFF
+    msg.param7 = altitude;
+
+    msg.targetSystem = this.targetSystem;
+    msg.targetComponent = this.targetComponent;
+
+    await send(this.port, msg, gcsProtocolEngine);
+  }
+
+  // async setMode(modeId) {
+  //   const msg = new common.SetMode();
+
+  //   msg.targetSystem = this.targetSystem;
+  //   msg.baseMode = 1; // MAV_MODE_FLAG_CUSTOM_MODE_ENABLED
+  //   msg.customMode = modeId;
+
+  //   await send(this.port, msg, gcsProtocolEngine);
+  // }
+
+  async setMode(modeId) {
+    const msg = new common.CommandLong();
+
+    msg.targetSystem = this.targetSystem;
+    msg.targetComponent = 1; // 1 represents the primary autopilot component (MAV_COMP_ID_AUTOPILOT1)
+    msg.command = 176; // MAV_CMD_DO_SET_MODE
+    msg.confirmation = 0; // First transmission of this command
+
+    // Param 1: Base mode flag. 1 specifies MAV_MODE_FLAG_CUSTOM_MODE_ENABLED
+    msg._param1 = 1;
+
+    // Param 2: The custom flight mode ID number (e.g., your modeId variable)
+    msg._param2 = modeId;
+
+    // Param 3: Sub-mode (Not used by ArduPilot, set to 0)
+    msg._param3 = 0;
+
+    // Params 4-7 are unused for this specific command and must be cleared to 0
+    msg._param4 = 0;
+    msg._param5 = 0;
+    msg._param6 = 0;
+    msg._param7 = 0;
+
+    await send(this.port, msg, gcsProtocolEngine);
+
+    console.log(
+      `[INFO] [MAVLINK_TX] Sending CMD_LONG (${msg.command}). Params: P1=${msg._param1}, P2=${msg._param2}`,
+    );
+  }
+
+  async rtl() {
+    const msg = new common.CommandLong();
+
+    msg.targetSystem = this.targetSystem;
+    msg.targetComponent = this.targetComponent;
+
+    msg.command = 20; // MAV_CMD_NAV_RETURN_TO_LAUNCH
+
+    await send(this.port, msg, gcsProtocolEngine);
+  }
+
+  onAck(command, status) {
+    for (const [key, pending] of this.pendingCommands.entries()) {
+      if (pending.command === command) {
+        console.log(" ACK matched:", key, status);
+
+        this.pendingCommands.delete(key);
+
+        https: if (status === "ACCEPTED") {
+          console.log(" SUCCESS:", key);
+        } else {
+          console.log(" FAILED:", key, status);
+        }
+
+        // optional: emit to UI
+        this.win?.webContents.send("command-result", {
+          command: key,
+          status,
+        });
+
+        break;
+      }
+    }
+  }
+}
+
+
+
+
+telemetryEngine.js ??????????????
+
+import {
+  MavLinkPacketSplitter,
+  MavLinkPacketParser,
+  minimal,
+  common,
+  ardupilotmega,
+} from "node-mavlink";
+
+const REGISTRY = {
+  ...minimal.REGISTRY,
+  ...common.REGISTRY,
+  ...ardupilotmega.REGISTRY,
+};
+
+const WHITELIST_MSGS = [
+  "Attitude",
+  "GlobalPositionInt",
+  "VfrHud",
+  "SysStatus",
+  "ParamValue",
+  "MissionCurrent",
+  "Heartbeat",
+  "PowerStatus",
+  "GpsRawInt",
+  "StatusText",
+  "CommandAck",
+  "CompassMotStatus",
+];
+
+const MESSAGE_INTERVALS = {
+  Attitude: 200, // 5 Hz
+  GlobalPositionInt: 500, // 2 Hz
+  VfrHud: 500, // 2 Hz
+  SysStatus: 1000, // 1 Hz
+  ParamValue: 1000, // 1 Hz
+  MissionCurrent: 1000, // 1 Hz
+  Heartbeat: 200,
+  PowerStatus: 1000,
+  GpsRawInt: 200,
+  StatusText: 0,
+  CommandAck: 0,
+  CompassMotStatus: 0,
+};
+
+export class TelemetryEngine {
+  constructor({
+    port,
+    win,
+    flightState,
+    paramService,
+    commandService,
+    hardwareCheck,
+    calibrationService,
+    compassCalibrationService,
+    compassMotCalibrationService,
+  }) {
+    this.port = port;
+    this.win = win;
+    this.flightState = flightState;
+    this.paramService = paramService;
+    this.commandService = commandService;
+    this.hardwareCheck = hardwareCheck;
+    this.calibrationService = calibrationService;
+    this.compassCalibrationService = compassCalibrationService;
+    this.compassMotCalibrationService = compassMotCalibrationService;
+
+    this.splitter = new MavLinkPacketSplitter();
+    this.parser = new MavLinkPacketParser();
+
+    this.onData = this.onData.bind(this);
+    this.onPacket = this.onPacket.bind(this);
+    this.messagesPerSecond = 0;
+    this.totalMessages = 0;
+    this.lastSent = {};
+  }
+
+  start() {
+    this.port.on("data", this.onData);
+    this.splitter.pipe(this.parser);
+    // this.parser.on("data", this.onPacket);
+    this.parser.on("data", (packet) => this.onPacket(packet));
+
+    this.parser.on("error", console.error);
+
+    // Print every second
+    this.statsInterval = setInterval(() => {
+      // console.log(` ${this.messagesPerSecond} MAVLink msgs/sec`);
+
+      this.messagesPerSecond = 0;
+    }, 1000);
+
+    console.log(" TelemetryEngine started");
+  }
+
+  stop() {
+    try {
+      this.port?.off("data", this.onData);
+
+      this.splitter?.removeAllListeners();
+      this.parser?.removeAllListeners();
+
+      this.splitter = null;
+      this.parser = null;
+
+      console.log(" TelemetryEngine stopped");
+    } catch (e) {
+      console.error("TelemetryEngine stop error:", e);
+    }
+  }
+
+  onData(chunk) {
+    this.splitter.write(chunk);
+  }
+
+  onPacket(packet) {
+    try {
+      // console.log(
+      //   "[RAW MAVLINK]",
+      //   "msgid=",
+      //   packet.header.msgid,
+      //   "sys=",
+      //   packet.header.systemid,
+      //   "comp=",
+      //   packet.header.componentid,
+      // );
+      this.messagesPerSecond++;
+      this.totalMessages++;
+      // console.log(packet);
+      if (!packet?.header) return;
+
+      //capturing the system id
+      const currentSysId = packet.header.sysid;
+      const currentCompId = packet.header.compid;
+      // console.log(packet.header);
+
+      //  2. Push it straight into your command service so it stays updated
+      if (this.commandService) {
+        this.commandService.targetSystem = currentSysId;
+        this.commandService.targetComponent = currentCompId;
+        // console.log("the targetStystem is:", currentSysId);
+        // console.log("the targetComponent is :", currentCompId);
+      }
+
+      if (this.paramService) {
+        this.paramService.targetSystem = currentSysId;
+        this.paramService.targetComponent = currentCompId;
+        // console.log("param service targetSystem:", currentSysId);
+      }
+
+      const Clazz = REGISTRY[packet.header.msgid];
+      if (!Clazz) return;
+
+      const msg = packet.protocol.data(packet.payload, Clazz);
+      if (!msg) return;
+
+      const msgType = Clazz.name;
+      // console.log("TELEM ONPACKET:", msgType, "msgid=", packet.header.msgid);
+      // this.hardwareCheck?.processIncomingTelemetry(msgType, msg);
+      // console.log(msg);
+
+      // -------------------------
+      // STATE UPDATES
+      // -------------------------
+      if (packet.header.msgid === 1) {
+        this.flightState?.updateSysStatus(msg);
+      }
+
+      if (packet.header.msgid === 74) {
+        this.flightState?.updateVfrHud(msg);
+      }
+
+      if (packet.header.msgid === 193) {
+        this.flightState?.updateEkfStatus(msg);
+      }
+      if (packet.header.msgid === 0) {
+        this.flightState?.updateHeartbeat(msg);
+        this.commandService?.handleHeartbeat(msg);
+      }
+
+      if (packet.header.msgid === 33) {
+        this.flightState?.updatePosition(msg);
+      }
+
+      if (packet.header.msgid === 177) {
+        this.compassMotCalibrationService?.handleCompassMotStatusMessage(msg);
+        console.log("object of compassMotStatus = 177: ", msg);
+      }
+
+      if (packet.header.msgid === 24) {
+        this.flightState?.updateGPS(msg);
+      }
+      if (packet.header.msgid === 253) {
+        console.log(
+          `statusText Receving : ${msg.text} , severity : ${msg.severity} `,
+        );
+        // console.log(`message: ${msg}`);
+        this.calibrationService?.handleStatusText(msg.text);
+        this.compassMotCalibrationService?.handleStatusText(msg.text);
+        this.win.webContents.send("telemetry", {
+          type: "StatusText",
+          data: msg,
+          sentAt: Date.now(),
+        });
+      }
+
+      if (packet.header.msgid === 76) {
+        // COMMAND_LONG
+        const cmdLong = packet.protocol.data(
+          packet.payload,
+          common.CommandLong,
+        );
+
+        // If the drone is sending command 42429, it's telling us what position it wants!
+        if (
+          cmdLong.command === 42429 &&
+          this.calibrationService?.state.active
+        ) {
+          console.log(
+            `[DRONE SOURCE] Drone is explicitly requesting position index: ${cmdLong._param1}`,
+          );
+          this.calibrationService.handleDroneRequestedPosition(cmdLong._param1);
+        }
+      }
+
+      if (packet.header.msgid === 77) {
+        console.log("this message is from command_ack", msg);
+        console.log(
+          ` [DRONE ACK RESULT] Received response for command ${msg.command}. Result code is: ${msg.result}`,
+          msg,
+        );
+        const command = msg.command;
+        const result = msg.result;
+
+        let status = "UNKNOWN";
+
+        switch (result) {
+          case 0:
+            status = "ACCEPTED";
+            break;
+
+          case 1:
+            status = "TEMP_REJECTED";
+            break;
+          case 2:
+            status = "DENIED";
+            break;
+          case 3:
+            status = "UNSUPPORTED";
+            break;
+          case 4:
+            status = "FAILED";
+            break;
+        }
+
+        this.flightState?.updateAck(command, status);
+
+        this.commandService?.onAck(command, status);
+
+        // this.calibrationService?.handleAck(command, result);
+
+        this.compassCalibrationService?.handleAck(command, result);
+
+        this.compassMotCalibrationService?.handleAck(command, result);
+      }
+
+      if (msgType === "MagCalProgress") {
+        console.log("Received MagCalProgress ", msgType);
+        this.compassCalibrationService?.handleProgress(msg);
+      }
+
+      if (msgType === "MagCalReport") {
+        console.log("Received MagCalReport", msgType);
+        this.compassCalibrationService?.handleReport(msg);
+      }
+
+      this.paramService?.handle?.(msg);
+
+      const now = Date.now();
+
+      if (!WHITELIST_MSGS.includes(msgType)) return;
+
+      // Throttle messages
+      const interval = MESSAGE_INTERVALS[msgType] || 1000;
+      if (this.lastSent[msgType] && now - this.lastSent[msgType] < interval) {
+        return; // skip sending
+      }
+      this.lastSent[msgType] = now;
+      this.hardwareCheck?.processIncomingTelemetry(msgType, msg);
+      // this.lastSent[msgType] = now;
+
+      const sentAt = Date.now();
+
+      // Send telemetry to UI
+      this.win.webContents.send("telemetry", {
+        type: msgType,
+        data: msg,
+        sentAt,
+      });
+    } catch (err) {
+      console.error("Telemetry decode error:", err);
+    }
+  }
+}
+
+
+
+joystickService.js ?????????????????????
+
+export class JoystickService {
+  // Define a static default configuration so it's always accessible
+  // static DEFAULT_CONFIG = {
+  //   axes: { 0: "roll", 1: "pitch", 2: "yaw", 3: "throttle" },
+  //   buttons: {
+  //     0: "ARM_TOGGLE",
+  //     1: "MODE_RTL",
+  //     2: "MODE_LOITER",
+  //     3: "MODE_ALTHOLD",
+  //     4: "MODE_STABILIZE",
+  //     5: "MODE_GUIDED",
+  //     6: "MODE_LAND",
+  //   },
+  // };
+  static DEFAULT_CONFIG = {
+    axes: {
+      0: "yaw",
+      1: "throttle",
+      2: "roll",
+      3: "pitch",
+    },
+
+    buttons: {
+      0: "MODE_LAND", // A
+      1: "MODE_RTL", // B
+      2: "MODE_GUIDED", // X
+      3: "MODE_LOITER", // Y
+    },
+  };
+
+  constructor(commandService) {
+    this.commandService = commandService;
+
+    // Use the static reference safely to deep clone your fallback layout
+    this.config = JSON.parse(JSON.stringify(JoystickService.DEFAULT_CONFIG));
+
+    this.axes = { roll: 0, pitch: 0, yaw: 0, throttle: -1 };
+    this.buttons = [];
+    this.previousButtons = [];
+    this.interval = null;
+  }
+
+  setConfiguration(newConfig) {
+    if (!newConfig) {
+      this.config = JSON.parse(JSON.stringify(JoystickService.DEFAULT_CONFIG));
+      console.log(
+        "[BACKEND-JOYSTICK] Received empty config. Resetting to system fallback mappings.",
+      );
+      return;
+    }
+
+    // Safely merge incoming configuration properties with static fallbacks
+    this.config = {
+      axes: {
+        ...JoystickService.DEFAULT_CONFIG.axes,
+        ...(newConfig.axes || {}),
+      },
+      buttons: {
+        ...JoystickService.DEFAULT_CONFIG.buttons,
+        ...(newConfig.buttons || {}),
+      },
+    };
+    console.log(" Current Active Button Assignments:");
+    Object.entries(this.config.buttons).forEach(([buttonIndex, actionName]) => {
+      console.log(
+        `   • [Button ${buttonIndex}] ──► Assigned to Function: ${actionName}`,
+      );
+    });
+
+    console.log(" Current Active Axis Assignments:");
+    Object.entries(this.config.axes).forEach(([axisIndex, actionName]) => {
+      console.log(
+        `   • [Axis ${axisIndex}] ──► Assigned to Function: ${actionName.toUpperCase()}`,
+      );
+    });
+    console.log(
+      "[BACKEND-JOYSTICK] Configuration merged. Active mapping shape:",
+      this.config,
+    );
+  }
+
+  updateAxes(data) {
+    const rawAxes = data.axes ?? [];
+    let rawButtons = data.buttons ?? [];
+    rawButtons = rawButtons.map((b) => (b === true || b === 1 ? 1 : 0));
+
+    if (rawAxes.length > 0 || rawButtons.length > 0) {
+      console.log(
+        `[BACKEND-JOYSTICK] Axes Data: [${rawAxes.map((v) => v.toFixed(2)).join(", ")}] | 🔴 Buttons Data: [${rawButtons.map((b) => (b ? "1" : "0")).join(", ")}]`,
+      );
+    }
+
+    let nextAxes = { roll: 0, pitch: 0, yaw: 0, throttle: -1 };
+
+    // rawAxes.forEach((axisValue, index) => {
+    //   // Safely point to JoystickService.DEFAULT_CONFIG instead of this.DEFAULT_CONFIG
+    //   const assignedAction =
+    //     this.config.axes[index] ||
+    //     JoystickService.DEFAULT_CONFIG.axes[index] ||
+    //     "unassigned";
+
+    //   if (assignedAction !== "unassigned") {
+    //     if (assignedAction === "pitch" || assignedAction === "throttle") {
+    //       nextAxes[assignedAction] = -axisValue;
+    //     } else {
+    //       nextAxes[assignedAction] = axisValue;
+    //     }
+    //   }
+    // });
+
+    rawAxes.forEach((axisValue, index) => {
+      const assignedAction = this.config.axes[index] || "unassigned";
+
+      if (assignedAction !== "unassigned") {
+        // Clean, single-point inversion logic for flight hardware standards
+        // Gamepad standard is typically Down/Right = Positive, Flight is Up/Right = Positive
+        if (assignedAction === "pitch" || assignedAction === "throttle") {
+          nextAxes[assignedAction] = -axisValue;
+        } else {
+          nextAxes[assignedAction] = axisValue;
+        }
+      }
+    });
+    this.axes = nextAxes;
+
+    if (data.buttons) {
+      this.previousButtons = this.buttons.length
+        ? [...this.buttons]
+        : new Array(rawButtons.length).fill(0);
+
+      this.buttons = [...rawButtons];
+    }
+  }
+
+  start() {
+    if (this.interval) return;
+    this.interval = setInterval(() => {
+      this.sendOverride();
+      this.handleButtonActions();
+      this.previousButtons = [...this.buttons];
+    }, 20); //50Hz
+  }
+
+  async stop() {
+    if (!this.interval) return;
+    clearInterval(this.interval);
+    this.interval = null;
+    await this.commandService.sendRCOverride({
+      roll: 1500,
+      pitch: 1500,
+      yaw: 1500,
+      throttle: 1000,
+    });
+  }
+
+  deadband(value, threshold = 0.05) {
+    const absValue = Math.abs(value);
+    if (absValue < threshold) return 0;
+    const sign = Math.sign(value);
+    return sign * ((absValue - threshold) / (1.0 - threshold));
+  }
+
+  // sendOverride() {
+  //   const rollPwm = this.axisToPwm(this.axes.roll);
+  //   const pitchPwm = this.axisToPwm(-this.axes.pitch);
+  //   const yawPwm = this.axisToPwm(this.axes.yaw);
+  //   const throttlePwm = this.throttleToPwm(-this.axes.throttle);
+
+  //   this.commandService.sendRCOverride({
+  //     roll: rollPwm,
+  //     pitch: pitchPwm,
+  //     yaw: yawPwm,
+  //     throttle: throttlePwm,
+  //   });
+  // }
+
+  sendOverride() {
+    // 🪄 The real axis magic: Map directly from the cleaned object properties
+    // No secondary hardcoded negative signs!
+    const rollPwm = this.axisToPwm(this.axes.roll);
+    const pitchPwm = this.axisToPwm(this.axes.pitch);
+    const yawPwm = this.axisToPwm(this.axes.yaw);
+    const throttlePwm = this.throttleToPwm(this.axes.throttle);
+
+    this.commandService.sendRCOverride({
+      roll: rollPwm,
+      pitch: pitchPwm,
+      yaw: yawPwm,
+      throttle: throttlePwm,
+    });
+  }
+
+  handleButtonActions() {
+    if (this.buttons.length === 0) return;
+
+    const isJustPressed = (index) => {
+      // Check if currently 1 (pressed) and previously 0 (not pressed)
+      return (
+        Number(this.buttons[index]) === 1 &&
+        Number(this.previousButtons[index]) === 0
+      );
+    };
+
+    this.buttons.forEach((_, index) => {
+      if (isJustPressed(index)) {
+        const assignedAction = this.config.buttons[index];
+        if (assignedAction && assignedAction !== "unassigned") {
+          this.executeCustomAction(assignedAction);
+        }
+      }
+    });
+  }
+
+  executeCustomAction(actionKey) {
+    console.log(`Triggering custom action map key: ${actionKey}`);
+    switch (actionKey) {
+      case "ARM_TOGGLE":
+        console.log("Executing: toggleArm");
+        // this.commandService.toggleArm();
+        break;
+      case "MODE_RTL":
+        console.log("Executing: Mode rtl");
+        this.commandService.setMode(0);
+        break;
+      case "MODE_LOITER":
+        console.log("Executing: Loiter");
+        this.commandService.setMode(5);
+        break;
+      case "MODE_ALTHOLD":
+        console.log("Executing: AltHold");
+        this.commandService.setMode(2);
+        break;
+
+      case "MODE_STABILIZE":
+        console.log("Executing: Stabilize Mode");
+        this.commandService.setMode(1); // ArduPilot Stabilize is mode 1
+        break;
+      case "MODE_GUIDED":
+        console.log("Executing: Guided Mode");
+        this.commandService.setMode(4); // ArduPilot Guided is mode 4
+        break;
+      case "MODE_LAND":
+        console.log("Executing: Land Mode");
+        this.commandService.setMode(9); // ArduPilot Land is mode 9
+        break;
+      default:
+        console.warn(`Action string unrecognized: ${actionKey}`);
+    }
+  }
+
+  axisToPwm(axis) {
+    const clamped = Math.max(-1, Math.min(1, axis));
+    const cleanAxis = this.deadband(clamped);
+    return Math.round(1500 + cleanAxis * 500);
+  }
+
+  throttleToPwm(axis) {
+    const clamped = Math.max(-1, Math.min(1, axis));
+    return Math.round(1000 + ((clamped + 1) / 2) * 1000);
+  }
+}
+
+paramService.js ?????????????????????????????????
+
+import { common, send, MavLinkProtocolV2 } from "node-mavlink";
+
+const gcsProtocolEngine = new MavLinkProtocolV2();
+gcsProtocolEngine.sysid = 255;
+gcsProtocolEngine.compid = 190;
+
+export class ParamService {
+  constructor(port, win) {
+    this.port = port;
+    this.win = win;
+    this.params = {};
+    this.pendingSets = new Map();
+    this.targetSystem = 1;
+    this.targetComponent = 1;
+  }
+
+  async requestAll() {
+    console.log(" Requesting all parameters...");
+
+    this.params = {};
+    this.totalParams = 0;
+    this.receivedCount = 0;
+
+    const message = new common.ParamRequestList();
+
+    message.targetSystem = this.targetSystem;
+    message.targetComponent = this.targetComponent;
+
+    try {
+      await send(this.port, message, gcsProtocolEngine);
+      console.log("PARAM_REQUEST_LIST sent");
+    } catch (err) {
+      console.error(" Send failed:", err);
+    }
+  }
+
+  async setParam({ id, value, type }) {
+    console.log(" Setting param:", id, value);
+
+    const msg = new common.ParamSet();
+
+    msg.targetSystem = this.targetSystem;
+    msg.targetComponent = this.targetComponent;
+
+    msg.paramId = id;
+    msg.paramValue = value;
+    msg.paramType = type;
+
+    //  TRACK PENDING WRITE
+    setTimeout(() => {
+      if (this.pendingSets.has(id)) {
+        this.win.webContents.send("param-set-result", {
+          id,
+          success: false,
+          error: "timeout",
+        });
+
+        this.pendingSets.delete(id);
+        console.log(" PARAM SET TIMEOUT:", id);
+      }
+    }, 3000);
+
+    try {
+      await send(this.port, msg, gcsProtocolEngine);
+      console.log("PARAM_SET sent");
+    } catch (err) {
+      console.error(" PARAM_SET failed:", err);
+      this.pendingSets.delete(id);
+    }
+  }
+
+  handle(msg) {
+    if (!msg?.paramId) return;
+
+    const id = msg.paramId;
+
+    // store latest value
+    this.params[id] = {
+      value: msg.paramValue,
+      type: msg.paramType,
+      index: msg.paramIndex,
+    };
+
+    if (this.pendingSets?.has(id)) {
+      const pending = this.pendingSets.get(id);
+
+      const isConfirmed =
+        msg.paramId === id &&
+        Math.abs(Number(msg.paramValue) - Number(pending.value)) < 0.0001;
+
+      if (isConfirmed) {
+        this.win.webContents.send("param-set-result", {
+          id,
+          success: true,
+          value: msg.paramValue,
+        });
+
+        console.log(" PARAM CONFIRMED:", id);
+
+        this.pendingSets.delete(id);
+      }
+    }
+
+    // normal UI update
+    this.win.webContents.send("param", {
+      id: msg.paramId,
+      value: msg.paramValue,
+      type: msg.paramType,
+      index: msg.paramIndex,
+    });
+
+    clearTimeout(this.completeTimer);
+
+    this.completeTimer = setTimeout(() => {
+      this.win.webContents.send("param-complete", {
+        total: Object.keys(this.params).length,
+        params: this.params,
+      });
+    }, 1000);
+  }
+
+  // handle(msg) {
+  //   if (!msg?.paramId) return;
+
+  //   if (!this.totalParams && msg.paramCount) {
+  //     this.totalParams = msg.paramCount;
+  //   }
+
+  //   this.params[msg.paramId] = {
+  //     value: msg.paramValue,
+  //     type: msg.paramType,
+  //     index: msg.paramIndex,
+  //   };
+
+  //   this.win.webContents.send("param", {
+  //     id: msg.paramId,
+  //     value: msg.paramValue,
+  //   });
+
+  //   //  stabilization-based completion
+  //   clearTimeout(this.completeTimer);
+
+  //   this.completeTimer = setTimeout(() => {
+  //     console.log(" Param stream stabilized");
+
+  //     this.win.webContents.send("param-complete", {
+  //       total: Object.keys(this.params).length,
+  //       params: this.params,
+  //     });
+  //   }, 1000);
+  // } // 28.4 - 5:14
+}
+
+// When connected:
+
+// joystickService = new JoystickService(commandService);
+// joystickService.start(0);
+
+// When disconnect:
+
+// joystickService?.stop();
+// joystickService = null;
+// 8. Add IPC control (UI toggle)
+// ipcMain.on("joystick-enable", () => {
+//   joystickService?.start(0);
+// });
+
+// ipcMain.on("joystick-disable", () => {
+//   joystickService?.stop();
+// });
+// 9. Critical MAVLink requirement (VERY IMPORTANT)
+
+// To make joystick actually take control:
+
+// You MUST also:
+// Send RC_OVERRIDE continuously (you already do)
+// Ensure autopilot is in:
+// GUIDED / STABILIZE / MANUAL (depends on ArduPilot config)
+
+// Otherwise:
+
+// joystick input will be ignored
+
+// 10. Timing (important)
+
+// Send RC override at:
+
+// 20–50 Hz (50ms → 20ms)
+
+// Not slower.
+
+// 11. Common problems (you will hit these)
+// 1. Drone ignores joystick
+
+// → Mode not correct (GUIDED/STABILIZE required)
+
+// 2. Inputs jitter
+
+// → no deadzone applied
+
+// 3. Throttle reversed
+
+// → need scaling fix
+
+// 4. UDP works but Serial doesn't
+
+// → targetSystem not learned yet
+
+// 12. If you want MissionPlanner-level joystick
+
+// Next upgrades after this:
+
+// Expo curves (you already started this concept in C#)
+// Deadzone filtering
+// Mode switch via joystick button
+// Failsafe if joystick disconnects
+// RC calibration UI
+
+// test file
+// import HID from "node-hid";
+
+// const devices = HID.devices();
+
+// console.log(devices);
+
+// const joystick = new HID.HID(1133, 49685); // replace yours
+
+// joystick.on("data", (data) => {
+//   console.log([...data]);
+// });
+
+// test file 2
+
+// joystick.on("data", (data) => {
+
+//     const raw = [...data];
+
+//     console.clear();
+
+//     console.table({
+//         x: raw[0],
+//         y: raw[1],
+//         z: raw[2],
+//         rx: raw[3],
+//         buttons: raw[4]
+//     });
+
+// });
+
+
+gamepad.jsx ??????????????
+
+
+import { useEffect, useRef } from "react";
+
+export function useJoystick() {
+  // Store the active hardware array slot index dynamically
+  const activeGamepadIndexRef = useRef(null);
+
+  useEffect(() => {
+    const handleConnected = (e) => {
+      console.log(
+        `Joystick plugged in: ${e.gamepad.id} at slot [${e.gamepad.index}]`,
+      );
+      activeGamepadIndexRef.current = e.gamepad.index; // 🎯 Save the exact new index
+      window.electron?.enableJoystick();
+    };
+
+    const handleDisconnected = (e) => {
+      if (activeGamepadIndexRef.current === e.gamepad.index) {
+        console.log(`Joystick pulled out from slot [${e.gamepad.index}].`);
+        activeGamepadIndexRef.current = null; // Clear out index
+        window.electron?.disableJoystick();
+      }
+    };
+
+    window.addEventListener("gamepadconnected", handleConnected);
+    window.addEventListener("gamepaddisconnected", handleDisconnected);
+
+    // Scan for any controller already plugged in before mounting listeners
+    const initialGamepads = navigator.getGamepads();
+    for (let i = 0; i < initialGamepads.length; i++) {
+      if (initialGamepads[i]) {
+        activeGamepadIndexRef.current = i;
+        window.electron?.enableJoystick();
+        break;
+      }
+    }
+
+    const interval = setInterval(() => {
+      if (activeGamepadIndexRef.current === null) return;
+
+      // Always read the array using the active slot index reference
+      const gamepad = navigator.getGamepads()[activeGamepadIndexRef.current];
+      if (!gamepad) return; // Safely handle structural dropouts
+
+      const rawAxes = Array.from(gamepad.axes || []);
+      const rawButtons = (gamepad.buttons || []).map((b) =>
+        b.pressed ? 1 : 0,
+      );
+
+      window.electron.sendJoystick({
+        axes: rawAxes,
+        buttons: rawButtons,
+      });
+    }, 20); // 50Hz Loop
+
+    return () => {
+      window.removeEventListener("gamepadconnected", handleConnected);
+      window.removeEventListener("gamepaddisconnected", handleDisconnected);
+      clearInterval(interval);
+      window.electron?.disableJoystick();
+    };
+  }, []);
+}
+
+
+gamepad.js ?????????????
+
+import { useEffect, useState } from "react";
+
+export function useGamepad() {
+  const [gamepad, setGamepad] = useState(null);
+
+  useEffect(() => {
+    const update = () => {
+      const pads = navigator.getGamepads();
+
+      const active = Array.from(pads).find((pad) => pad && pad.connected);
+
+      if (active) {
+        setGamepad({
+          id: active.id,
+          index: active.index,
+          axes: active.axes,
+          buttons: active.buttons,
+        });
+      } else {
+        setGamepad(null);
+      }
+    };
+
+    window.addEventListener("gamepadconnected", update);
+    window.addEventListener("gamepaddisconnected", update);
+
+    const interval = setInterval(update, 500);
+
+    return () => {
+      window.removeEventListener("gamepadconnected", update);
+      window.removeEventListener("gamepaddisconnected", update);
+      clearInterval(interval);
+    };
+  }, []);
+
+  return gamepad;
+}
+
+gamepadAxes.jsx ???????????????
+
+import { useEffect } from "react";
+
+export function useGamepadDebug() {
+  useEffect(() => {
+    const timer = setInterval(() => {
+      const gp = navigator.getGamepads()[0];
+
+      if (!gp) return;
+
+      console.log("complete GB object: ", gp);
+      console.log("Controller:", gp.id);
+
+      console.log("Axes:", gp.axes);
+
+      console.log(
+        "Buttons:",
+        gp.buttons.map((b, i) => ({
+          index: i,
+          pressed: b.pressed,
+          value: b.value,
+        })),
+      );
+    }, 200);
+
+    return () => clearInterval(timer);
+  }, []);
+}
+
+joystickSettings.jsx ??????????????
+
+
+
+paramStore.js ???????????????????????
+
+// store/paramStore.js
+import { create } from "zustand";
+
+export const useParamStore = create((set) => ({
+  params: {},
+  meta: {},
+  loading: false,
+  loaded: false,
+  total: 0,
+
+  setParams: (params) =>
+    set({
+      params,
+      total: Object.keys(params).length,
+      loaded: true,
+      loading: false,
+    }),
+
+  updateParam: (id, param) =>
+    set((state) => ({
+      params: {
+        ...state.params,
+        [id]: {
+          ...state.params[id],
+          ...param,
+        },
+      },
+    })),
+
+  setMeta: (meta) => set({ meta }),
+
+  setLoading: (loading) => set({ loading }),
+}));
+
+
+telemetryStore.js ????????????????????/
+
+
+//-------------------------architecture changed 7/5/26---------------//
+import { create } from "zustand";
+export const useTelemetryStore = create((set) => ({
+  messages: {},
+  flash: {},
+  attitude: { roll: 0, pitch: 0, yaw: 0 },
+  attitudeHistory: [],
+  _lastHistoryUpdate: 0,
+  connectionState: "DISCONNECTED",
+  statusLogs: [],
+
+  // setConnectionState: (state) => set({ connectionState: state }),
+
+  setConnectionState: (state) =>
+    set((store) => ({
+      connectionState: state,
+      statusLogs:
+        state === "CONNECTING" || state === "DISCONNECTED"
+          ? []
+          : store.statusLogs,
+    })),
+
+  setMessage: (msg) =>
+    set((state) => {
+      const now = Date.now();
+
+      let updatedLogs = state.statusLogs;
+      // let udpatedLogs = [...state.statusLogs];
+      if (msg.type === "StatusText") {
+        updatedLogs = [
+          ...state.statusLogs,
+          {
+            id: crypto.randomUUID
+              ? crypto.randomUUID()
+              : Math.random().toString(36),
+            text: msg.data.text || msg.data, // Fallback depending on your IPC data shape
+            severity: msg.data.severity || "info",
+            timestamp: now,
+          },
+        ].slice(-150); //  rolling history window of the last 150 log entries
+      }
+
+      return {
+        messages: {
+          ...state.messages,
+          [msg.type]: {
+            data: msg.data,
+            updatedAt: now,
+          },
+        },
+        flash: {
+          ...state.flash,
+          [msg.type]: now,
+        },
+        statusLogs: updatedLogs,
+      };
+    }),
+
+  //  throttle history updates
+  setAttitude: (roll, pitch, yaw) =>
+    set((state) => {
+      const now = Date.now();
+
+      let newHistory = state.attitudeHistory;
+
+      if (now - state._lastHistoryUpdate > 100) {
+        newHistory = [
+          ...state.attitudeHistory,
+          { time: now, roll, pitch, yaw },
+        ].slice(-100);
+      }
+
+      return {
+        attitude: { roll, pitch, yaw },
+        attitudeHistory: newHistory,
+        _lastHistoryUpdate: now,
+      };
+    }),
+}));
+
+
+mainLayout.jsx ????????????????????//
+
+import { Outlet, useNavigate } from "react-router-dom";
+import { useState, useEffect } from "react";
+import { Card } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { useLocation } from "react-router-dom";
+import { useTelemetryStore } from "@/store/telemetryStore";
+
+import {
+  LayoutDashboard,
+  Activity,
+  Gamepad2,
+  SlidersHorizontal,
+  CircuitBoard,
+  DraftingCompass,
+  Drone,
+  Shield,
+  ShieldAlert,
+  Save,
+  RotateCcw,
+  PlaneTakeoff,
+} from "lucide-react";
+
+// ArduPilot custom mode integers matching your backend CommandService.setMode(modeId) rules
+const FLIGHT_MODES = [
+  { value: 1, label: "Stabilize" },
+  { value: 2, label: "Altitude Hold" },
+  { value: 5, label: "Loiter" },
+  { value: 4, label: "Guided" },
+  { value: 3, label: "Auto" },
+  { value: 0, label: "Return To Launch (RTL)" },
+  { value: 9, label: "Land" },
+];
+
+export default function MainLayout() {
+  const [guidedDialogOpen, setGuidedDialogOpen] = useState(false);
+  const [guidedAltitude, setGuidedAltitude] = useState(10);
+  const [takeoffAltitude, setTakeoffAltitude] = useState(10);
+
+  const navigate = useNavigate();
+  const location = useLocation();
+
+  // Connect cleanly to your unified messages object store layout
+  const connectionState = useTelemetryStore((s) => s.connectionState);
+  const heartbeatMessage = useTelemetryStore(
+    (s) => s.messages["Heartbeat"]?.data,
+  );
+  const globalPosInt = useTelemetryStore(
+    (s) => s.messages["GlobalPositionInt"]?.data,
+  );
+
+  const isConnected = connectionState === "CONNECTED";
+
+  const latitude =
+    globalPosInt?.lat !== undefined ? globalPosInt.lat / 1e7 : null;
+
+  const longitude =
+    globalPosInt?.lon !== undefined ? globalPosInt.lon / 1e7 : null;
+
+  // MAVLink Bitmask extraction: ArduPilot uses base_mode bit 128 (0x80) for armed status
+  const baseMode =
+    heartbeatMessage?.baseMode ?? heartbeatMessage?.base_mode ?? 0;
+  const isArmed = (baseMode & 128) !== 0;
+
+  // Extract the live active mode running inside the drone autopilot registers
+  const currentVehicleMode =
+    heartbeatMessage?.customMode ?? heartbeatMessage?.custom_mode ?? 1;
+
+  // Staged state for mode change selection BEFORE pushing down the telemetry line
+  const [selectedMode, setSelectedMode] = useState(Number(currentVehicleMode));
+
+  // Sync selection state if mode shifts internally due to failsafes or switch toggles
+  useEffect(() => {
+    setSelectedMode(Number(currentVehicleMode));
+  }, [currentVehicleMode]);
+
+  const tabs = [
+    { path: "/telemetry?tab=dashboard", icon: LayoutDashboard },
+    { path: "/telemetry?tab=telemetry", icon: Activity },
+    { path: "/hardwareCheck", icon: CircuitBoard },
+    { path: "/flightLayout", icon: Drone },
+    { path: "/loadParameters", icon: SlidersHorizontal },
+    { path: "/calibration", icon: DraftingCompass },
+    { path: "/joystick", icon: Gamepad2 },
+  ];
+
+  // Leverages your matching preload signature: window.electron.flightCommand(cmd, payload)
+  const handleArmToggle = () => {
+    if (!isConnected) return;
+    const actionKey = isArmed ? "DISARM" : "ARM";
+    window.electron?.flightCommand(actionKey);
+  };
+
+  const handleRebootFC = () => {
+    if (!isConnected) return;
+
+    const confirmed = window.confirm(
+      "Reboot the Flight Controller?\n\nThe vehicle will disconnect temporarily and reconnect after the reboot.",
+    );
+
+    if (!confirmed) return;
+
+    window.electron?.restartFc();
+  };
+
+  // Executes your explicit CommandService.setMode(modeId) routine via your save block
+  const handleSaveMode = () => {
+    if (!isConnected) return;
+    const targetModeId = Number(selectedMode);
+    console.log(
+      `[MAIN-LAYOUT] Requesting mode write hook to hardware ID: ${targetModeId}`,
+    );
+
+    window.electron?.flightCommand("SET_MODE", targetModeId);
+  };
+
+  const handleImmediateTakeoff = () => {
+    if (!isConnected) return;
+
+    if (!isArmed) {
+      alert(
+        "Takeoff Denied: You must ARM the flight controller before initializing takeoff.",
+      );
+      return;
+    }
+
+    if (Number(currentVehicleMode) !== 4) {
+      alert(
+        "Takeoff Denied: ArduPilot requires the drone to be explicitly in GUIDED mode to execute a Takeoff command.",
+      );
+      return;
+    }
+
+    if (takeoffAltitude <= 0 || takeoffAltitude > 50) {
+      alert(
+        "Takeoff Denied: Please specify a valid target altitude between 1 and 120 meters.",
+      );
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Confirm launch sequence? Drone will ascend vertically to ${takeoffAltitude} meters.`,
+    );
+    if (!confirmed) return;
+
+    window.electron?.flightCommand("TAKEOFF", { alt: takeoffAltitude });
+  };
+
+  const handleGuidedSave = () => {
+    if (latitude == null || longitude == null) {
+      alert("GPS position unavailable.");
+      return;
+    }
+
+    window.electron?.flightCommand("GUIDED", {
+      lat: latitude,
+      lon: longitude,
+      alt: guidedAltitude,
+    });
+
+    setSelectedMode(4);
+    setGuidedDialogOpen(false);
+  };
+
+  // Handles dropdown changes and intercepts Guided Mode (Value 4)
+  const handleDropdownChange = (e) => {
+    const nextMode = Number(e.target.value);
+    setSelectedMode(nextMode);
+
+    // if (nextMode === 4) {
+    //   if (latitude == null || longitude == null) {
+    //     alert(
+    //       "Cannot switch to Guided Mode: Live telemetry GPS coordinates are currently unavailable.",
+    //     );
+    //     setSelectedMode(Number(currentVehicleMode));
+    //     return;
+    //   }
+    //   setGuidedDialogOpen(true);
+    // }
+  };
+
+  return (
+    <div className="h-screen w-full flex overflow-hidden">
+      {/* GLOBAL SIDEBAR */}
+      <div className="w-20 bg-sidebar-primary flex flex-col items-center py-4 gap-4">
+        {tabs.map((tab, i) => {
+          const Icon = tab.icon;
+          const isActive = location.pathname + location.search === tab.path;
+
+          return (
+            <button
+              key={i}
+              onClick={() => navigate(tab.path)}
+              className={`text-white w-12 h-12 rounded-xl flex items-center justify-center transition
+        ${isActive ? "bg-chart-4 text-white shadow-md" : "hover:bg-chart-4"}`}
+            >
+              <Icon size={27} />
+            </button>
+          );
+        })}
+      </div>
+
+      {/* RIGHT SIDE */}
+      <div className="flex-1 flex flex-col overflow-hidden bg-sidebar-primary text-white">
+        {/* HEADER */}
+        <div className="flex items-center justify-between p-3 border-b border-zinc-800 bg-zinc-950">
+          <h1 className="text-lg font-semibold tracking-wide text-zinc-200">
+            MAVLink GCS
+          </h1>
+
+          <div className="flex gap-3 items-center">
+            {/*  MODE CHANGE SELECTOR DROPDOWN */}
+            {/* <div className="flex items-center gap-1.5 bg-zinc-900 border border-zinc-800 px-2 py-1 rounded-md">
+              <span className="text-[11px] text-zinc-400 font-medium uppercase tracking-wider">
+                Mode:
+              </span>
+              <select
+                disabled={!isConnected}
+                value={selectedMode}
+                onChange={(e) => setSelectedMode(Number(e.target.value))}
+                className="bg-transparent text-sm font-semibold text-white focus:outline-none cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {FLIGHT_MODES.map((mode) => (
+                  <option
+                    key={mode.value}
+                    value={mode.value}
+                    className="bg-zinc-950 text-white"
+                  >
+                    {mode.label}
+                  </option>
+                ))}
+              </select>
+            </div> */}
+            {/* PLACE DIRECTLY TO THE LEFT OF MODE CHANGE DROPDOWN CONTAINER */}
+            <div className="flex items-center gap-2 bg-zinc-900 border border-zinc-800 p-1 rounded-md">
+              <div className="flex items-center gap-1 pl-1">
+                <span className="text-[10px] text-zinc-400 font-bold uppercase tracking-wider">
+                  Alt:
+                </span>
+                <input
+                  type="number"
+                  disabled={!isConnected}
+                  value={takeoffAltitude}
+                  min={1}
+                  max={120}
+                  onChange={(e) => setTakeoffAltitude(Number(e.target.value))}
+                  className="w-12 bg-zinc-950 text-center text-xs font-mono font-bold text-emerald-400 border border-zinc-800 rounded py-0.5 outline-none focus:border-zinc-600 disabled:opacity-50"
+                />
+                <span className="text-[10px] text-zinc-500 font-bold font-mono">
+                  m
+                </span>
+              </div>
+
+              <Button
+                size="sm"
+                onClick={handleImmediateTakeoff}
+                disabled={
+                  !isConnected || !isArmed || Number(currentVehicleMode) !== 4
+                }
+                className={`flex items-center gap-1 text-xs font-black tracking-wide uppercase px-2.5 h-7 transition duration-200 ${
+                  isArmed && Number(currentVehicleMode) === 4
+                    ? "bg-emerald-600 hover:bg-emerald-500 text-white animate-pulse"
+                    : "bg-zinc-800 text-zinc-500 border border-zinc-700 opacity-40 cursor-not-allowed"
+                }`}
+              >
+                <PlaneTakeoff size={14} />
+                <span>Takeoff</span>
+              </Button>
+            </div>
+
+            {/* MODE CHANGE SELECTOR DROPDOWN */}
+            <div className="flex items-center gap-1.5 bg-zinc-900 border border-zinc-800 px-2 py-1 rounded-md">
+              <span className="text-[11px] text-zinc-400 font-medium uppercase tracking-wider">
+                Mode:
+              </span>
+              <select
+                disabled={!isConnected}
+                value={selectedMode}
+                onChange={handleDropdownChange}
+                className="bg-transparent text-sm font-semibold text-white focus:outline-none cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {FLIGHT_MODES.map((mode) => (
+                  <option
+                    key={mode.value}
+                    value={mode.value}
+                    className="bg-zinc-950 text-white"
+                  >
+                    {mode.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/*  SAVE MODE TRIGGER ACTION BUTTON */}
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={
+                !isConnected ||
+                Number(selectedMode) === Number(currentVehicleMode)
+              }
+              onClick={handleSaveMode}
+              className="flex items-center gap-1.5 border-zinc-700 hover:bg-zinc-500 text-zinc-300 disabled:opacity-40"
+            >
+              <Save size={15} />
+              <span>Save Mode</span>
+            </Button>
+
+            {/*  FLIGHT CONTROLLER ARMING TOGGLE */}
+            <Button
+              size="sm"
+              disabled={!isConnected}
+              variant={isArmed ? "destructive" : "default"}
+              onClick={handleArmToggle}
+              className={`flex items-center gap-1.5 font-bold transition duration-200 min-w-[110px] ${
+                !isArmed && isConnected
+                  ? "bg-emerald-600 hover:bg-emerald-700 text-white border-none"
+                  : ""
+              }`}
+            >
+              {isArmed ? (
+                <>
+                  <ShieldAlert size={16} className="animate-pulse" />
+                  <span>DISARM FC</span>
+                </>
+              ) : (
+                <>
+                  <Shield size={16} />
+                  <span>ARM DRONE</span>
+                </>
+              )}
+            </Button>
+
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={!isConnected}
+              onClick={handleRebootFC}
+              className="flex items-center gap-1.5 border-amber-600 text-amber-400 hover:bg-amber-600 hover:text-white"
+            >
+              <RotateCcw size={16} />
+              <span>Reboot FC</span>
+            </Button>
+
+            {/* MONO STATUS BAR CHIP */}
+            <Card className="px-3 py-1.5 text-xs font-mono font-bold tracking-wider bg-zinc-900 border-zinc-800 text-zinc-300">
+              {connectionState}
+            </Card>
+
+            {/* SYSTEM DISCONNECT ACTION */}
+            <Button
+              variant={isConnected ? "destructive" : "secondary"}
+              size="sm"
+              onClick={() => {
+                if (isConnected) {
+                  window.electron.disconnectPort();
+                }
+              }}
+            >
+              {isConnected ? "Disconnect" : "Disconnected"}
+            </Button>
+          </div>
+        </div>
+
+        {/* PAGE CONTENT */}
+        <div className="flex-1 overflow-y-auto">
+          <Outlet />
+        </div>
+      </div>
+      {/* {guidedDialogOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+          <div className="w-[400px] rounded-lg bg-zinc-900 border border-zinc-700 shadow-xl p-6">
+            <h2 className="text-xl font-semibold text-white mb-5">
+              Guided Mode
+            </h2>
+
+            <div className="mb-4">
+              <label className="block text-sm text-zinc-300 mb-2">
+                Target Altitude (meters)
+              </label>
+
+              <input
+                type="number"
+                value={guidedAltitude}
+                min={0}
+                onChange={(e) => setGuidedAltitude(Number(e.target.value))}
+                className="w-full rounded border border-zinc-600 bg-zinc-800 text-white px-3 py-2 outline-none focus:border-blue-500"
+              />
+            </div>
+
+            <div className="text-sm text-zinc-400 mb-6">
+              <p>Latitude: {latitude ?? "--"}</p>
+              <p>Longitude: {longitude ?? "--"}</p>
+            </div>
+
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => setGuidedDialogOpen(false)}
+                className="px-4 py-2 rounded bg-zinc-700 hover:bg-zinc-600 text-white"
+              >
+                Cancel
+              </button>
+
+              <button
+                onClick={handleGuidedSave}
+                className="px-4 py-2 rounded bg-blue-600 hover:bg-blue-700 text-white"
+              >
+                Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )} */}
+      {/* GUIDED MODE DIALOG PORTAL */}
+      {/* {guidedDialogOpen && (
+        <div className="fixed inset-0 z-1100 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="w-[400px] rounded-lg bg-zinc-900 border border-zinc-800 shadow-2xl p-6">
+            <h2 className="text-xl font-bold text-white mb-2 flex items-center gap-2">
+              <Drone className="text-blue-500 animate-pulse" size={20} />
+              Guided Mode Takeoff
+            </h2>
+            <p className="text-xs text-zinc-400 mb-5">
+              The drone will change its flight mode to Guided and hold its
+              current telemetry location coordinates.
+            </p>
+
+            <div className="mb-5">
+              <label className="block text-xs font-bold uppercase tracking-wider text-zinc-400 mb-2">
+                Target Altitude (Meters)
+              </label>
+              <input
+                type="number"
+                value={guidedAltitude}
+                min={0}
+                max={120}
+                onChange={(e) => setGuidedAltitude(Number(e.target.value))}
+                className="w-full rounded border border-zinc-700 bg-zinc-950 text-white font-mono px-3 py-2 outline-none focus:border-blue-500 transition"
+                placeholder="e.g. 10"
+              />
+            </div>
+
+            <div className="bg-zinc-950/50 border border-zinc-800 rounded p-3 text-xs font-mono text-zinc-400 mb-6 space-y-1">
+              <div className="flex justify-between">
+                <span>Live Telemetry Lat:</span>
+                <span className="text-zinc-200">
+                  {latitude != null ? latitude.toFixed(7) : "--"}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span>Live Telemetry Lon:</span>
+                <span className="text-zinc-200">
+                  {longitude != null ? longitude.toFixed(7) : "--"}
+                </span>
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => {
+                  setGuidedDialogOpen(false);
+                  setSelectedMode(Number(currentVehicleMode));
+                }}
+                className="px-4 py-2 text-sm font-semibold rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-300 transition"
+              >
+                Cancel
+              </button>
+
+              <button
+                onClick={handleGuidedSave}
+                disabled={guidedAltitude <= 0}
+                className="px-4 py-2 text-sm font-semibold rounded bg-blue-600 hover:bg-blue-700 text-white transition disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                Confirm & Execute
+              </button>
+            </div>
+          </div>
+        </div>
+      )} */}
+    </div>
+  );
+}
+
+
+FlightMap.jsx ??????????????????????
+
+import { useState, useEffect, useRef } from "react";
+import {
+  MapContainer,
+  TileLayer,
+  Marker,
+  Popup,
+  useMap,
+  useMapEvents,
+} from "react-leaflet";
+import { Card } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { useTelemetryStore } from "@/store/telemetryStore";
+import L from "leaflet";
+import { Navigation, Navigation2 } from "lucide-react";
+
+import markerIcon from "leaflet/dist/images/marker-icon.png";
+import markerShadow from "leaflet/dist/images/marker-shadow.png";
+
+let DefaultIcon = L.icon({
+  iconUrl: markerIcon,
+  shadowUrl: markerShadow,
+  iconSize: [25, 41],
+  iconAnchor: [12, 41],
+});
+
+L.Marker.prototype.options.icon = DefaultIcon;
+
+const layers = {
+  street: {
+    name: "Normal",
+    url: "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+    attribution: "© OpenStreetMap",
+  },
+  satellite: {
+    name: "Satellite",
+    url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+    attribution: "Tiles © Esri",
+  },
+};
+
+const WORLD_CENTER = [20.59, 78.96];
+
+function MapRecenter({ position }) {
+  const map = useMap();
+  const hasCentered = useRef(false);
+
+  useEffect(() => {
+    if (position && !hasCentered.current) {
+      map.flyTo(position, 14, { animate: true, duration: 1.5 });
+      hasCentered.current = true;
+    }
+    if (!position) {
+      hasCentered.current = false;
+      map.flyTo([20.59, 78.96], 5, { animate: true, duration: 1.5 });
+    }
+  }, [position, map]);
+
+  return null;
+}
+
+function MapTypeControl({ activeLayer, setActiveLayer, layers }) {
+  return (
+    <div className="leaflet-top leaflet-right !m-4">
+      <div className="leaflet-control flex gap-2 bg-zinc-900 p-2 rounded-xl border border-zinc-800 shadow-2xl pointer-events-auto">
+        {Object.entries(layers).map(([key, l]) => (
+          <button
+            key={key}
+            onClick={(e) => {
+              e.stopPropagation();
+              setActiveLayer(key);
+            }}
+            className={`rounded-md px-3 py-1 text-sm font-mono border transition ${
+              activeLayer === key
+                ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/30"
+                : "bg-zinc-800 text-zinc-400 border-zinc-700 hover:border-zinc-600"
+            }`}
+          >
+            {l.name}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// NEW COMPONENT: Intercepts clicks on the map layer for Guided Mode routing actions
+function MapClickHandler({ onMapClick }) {
+  useMapEvents({
+    click(e) {
+      onMapClick(e.latlng.lat, e.latlng.lng);
+    },
+  });
+  return null;
+}
+
+//Intercepts right click on the map layer for guided mode
+// function MapClickHandler ({onMapClick}) {
+// useMapEvents({
+//   contextmenu(e){
+//     e.originalEvent.preventDefault();
+
+//     onMapClick(e.latlng.lat, e.latlng.lng);
+//   }
+// })
+// }
+
+export default function FlightMap() {
+  const [activeLayer, setActiveLayer] = useState("street");
+  const layer = layers[activeLayer];
+
+  const connectionState = useTelemetryStore((s) => s.connectionState);
+  const gpsRaw = useTelemetryStore((s) => s.messages["GPS_RAW_INT"]?.data);
+  const globalPos = useTelemetryStore(
+    (s) => s.messages["GlobalPositionInt"]?.data,
+  );
+
+  // Guided routing states
+  const [targetPoint, setTargetPoint] = useState(null); // { lat, lon }
+  const [targetAlt, setTargetAlt] = useState(15); // Default cruise altitude in meters
+
+  const isConnected = connectionState === "CONNECTED";
+
+  let dronePosition = null;
+  if (isConnected) {
+    if (globalPos?.lat && globalPos?.lon) {
+      dronePosition = [globalPos.lat / 1e7, globalPos.lon / 1e7];
+    } else if (gpsRaw?.lat && gpsRaw?.lon) {
+      dronePosition = [gpsRaw.lat / 1e7, gpsRaw.lon / 1e7];
+    }
+  }
+
+  const handleMapClick = (lat, lng) => {
+    if (!isConnected) return;
+    // Open the interaction drawer containing altitude selection validation options
+    setTargetPoint({ lat, lon: lng });
+  };
+
+  const executeGuidedFlight = () => {
+    if (!targetPoint || !isConnected) return;
+    const rawRelativeAlt =
+      globalPos?.relative_alt ?? globalPos?.relativeAlt ?? 0;
+    const relativeAltMeters = rawRelativeAlt / 1000;
+    const isAirborne = relativeAltMeters > 1.5;
+    console.log(
+      `[FRONTEND-MAP] Dispatching Guided Go-To action payload...`,
+      targetPoint,
+    );
+    console.log(
+      `[FRONTEND-MAP] Dispatching Guided action | Mode Selection -> Airborne: ${isAirborne} (Current Alt: ${relativeAltMeters.toFixed(2)}m)`,
+    );
+
+    console.log(
+      `[MAP ACTION] Dispatched position command profile. System status: Airborne=${isAirborne}`,
+    );
+    // Triggers your preloaded cross-process window layout method cleanly
+    window.electron?.flightCommand("GUIDED", {
+      lat: targetPoint.lat,
+      lon: targetPoint.lon,
+      alt: Number(targetAlt),
+      isAirborne: isAirborne,
+    });
+
+    // Clear target point state once sent down to the autopilot pipeline
+    setTargetPoint(null);
+  };
+
+  const mapCenter = dronePosition ?? WORLD_CENTER;
+  console.log("gloalPos :", globalPos);
+
+  return (
+    <Card className="relative overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-950 shadow-xl">
+      <div className="h-[70vh] w-full relative">
+        <MapContainer
+          center={mapCenter}
+          zoom={dronePosition ? 14 : 5}
+          minZoom={2}
+          maxZoom={18}
+          className="h-full w-full outline-none"
+          scrollWheelZoom={true}
+        >
+          <MapRecenter position={dronePosition} />
+
+          <MapTypeControl
+            activeLayer={activeLayer}
+            setActiveLayer={setActiveLayer}
+            layers={layers}
+          />
+
+          {/* Connect map clicking triggers directly into state handlers */}
+          <MapClickHandler onMapClick={handleMapClick} />
+
+          <TileLayer
+            key={activeLayer}
+            url={layer.url}
+            attribution={layer.attribution}
+          />
+
+          {dronePosition && (
+            <Marker position={dronePosition}>
+              <Popup>
+                <div className="text-zinc-900 font-sans p-1">
+                  <p className="font-bold border-b pb-1 mb-1">
+                    Drone Telemetry
+                  </p>
+                  <p className="text-xs font-mono">
+                    Lat: {dronePosition[0].toFixed(6)}
+                  </p>
+                  <p className="text-xs font-mono">
+                    Lon: {dronePosition[1].toFixed(6)}
+                  </p>
+                </div>
+              </Popup>
+            </Marker>
+          )}
+
+          {/* Visual Indicator of the user's clicked destination target position */}
+          {targetPoint && (
+            <Marker
+              position={[targetPoint.lat, targetPoint.lon]}
+              icon={L.icon({
+                iconUrl: markerIcon,
+                className: "hue-rotate-[140deg] saturate-200", // Turns marker green/cyan to indicate a target
+              })}
+            >
+              <Popup>Target Waypoint</Popup>
+            </Marker>
+          )}
+        </MapContainer>
+
+        {/* Dynamic Guided Interaction Drawer Overlaid on top of Map Canvas view */}
+        {targetPoint && (
+          <div className="absolute top-4 left-4 z-[1000] bg-zinc-950/95 border border-zinc-800 p-4 rounded-xl shadow-2xl flex flex-col gap-3 min-w-[280px] text-white backdrop-blur-sm animate-in fade-in slide-in-from-bottom-2 duration-200">
+            <div>
+              <h3 className="text-sm font-bold tracking-wide text-zinc-200 flex items-center gap-1.5">
+                <Navigation size={14} className="text-emerald-400 rotate-45" />
+                Guided Target Selected
+              </h3>
+              <p className="text-[11px] text-zinc-400 font-mono mt-0.5">
+                Lat: {targetPoint.lat.toFixed(6)} | Lon:{" "}
+                {targetPoint.lon.toFixed(6)}
+              </p>
+            </div>
+
+            <div className="flex flex-col gap-1">
+              <label className="text-[11px] text-zinc-400 font-semibold uppercase tracking-wider">
+                Target Hover Altitude (Meters):
+              </label>
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  min="2"
+                  max="120"
+                  value={targetAlt}
+                  onChange={(e) =>
+                    setTargetAlt(Math.max(2, Number(e.target.value)))
+                  }
+                  className="bg-zinc-900 border border-zinc-800 rounded px-2 py-1 text-sm font-mono w-24 text-emerald-400 font-bold focus:outline-none focus:border-zinc-700"
+                />
+                <span className="text-xs text-zinc-500">meters AGL</span>
+              </div>
+            </div>
+
+            <div className="flex gap-2 mt-1">
+              <Button
+                size="sm"
+                onClick={executeGuidedFlight}
+                className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs gap-1"
+              >
+                <Navigation2 size={13} fill="currentColor" />
+                Fly To Target
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setTargetPoint(null)}
+                className="border-zinc-800 text-zinc-400 hover:bg-zinc-900 text-xs"
+              >
+                Cancel
+              </Button>
+            </div>
+          </div>
+        )}
+      </div>
+    </Card>
+  );
+}
+

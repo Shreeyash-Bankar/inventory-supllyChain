@@ -1,0 +1,1355 @@
+export class CompassMotCalibrationService {
+  constructor(commandService, win) {
+    this.commandService = commandService;
+    this.win = win;
+    this.compassMotRunning = false;
+    this.throttle = 0;
+    this.currentInterference = 0;
+    this.currentAmps = 0;
+  }
+
+  async startCompassMot() {
+    console.log("");
+
+    console.log(" STARTING COMPASSMOT");
+
+    this.compassMotRunning = true;
+
+    this.currentInterference = 0;
+    this.currentAmps = 0;
+
+    this.win.webContents.send("compassmot-status", {
+      state: "STARTING",
+    });
+
+    await this.commandService.startCompassMotCalibration();
+  }
+
+  handleUserThrottleInput(throttlePercentage) {
+    if (!this.compassMotRunning) return;
+
+    if (this.commandService.setThrottle) {
+      this.commandService.setThrottle(throttlePercentage);
+    }
+  }
+
+  async stopCompassMot() {
+    if (!this.compassMotRunning) return;
+    console.log("manual abort requested by pilot");
+
+    this.win.webContents.send("compassmot-status", {
+      state: "FAILED",
+    });
+
+    this.compassMotRunning = false;
+
+    if (this.commandService.sendCompassMotCancel) {
+      await this.commandService.sendCompassMotCancel();
+    }
+  }
+
+  handleAck(command, result) {
+    console.log(` COMPASSMOT ACK command=${command} result=${result}`);
+
+    if (!this.compassMotRunning) return;
+
+    if (command !== 241) return;
+
+    switch (result) {
+      case 0:
+        console.log(" COMPASSMOT accepted by FC");
+
+        this.win.webContents.send("compassmot-status", {
+          state: "ACCEPTED",
+        });
+
+        break;
+
+      case 1:
+        console.log(" COMPASSMOT temporarily rejected");
+
+        break;
+
+      case 2:
+        console.log(" COMPASSMOT denied");
+
+        break;
+
+      case 3:
+        console.log("COMPASSMOT unsupported");
+
+        break;
+
+      case 4:
+        console.log(" COMPASSMOT failed");
+        console.log(" COMPASSMOT startup rejected by flight hardware rules.");
+        this.compassMotRunning = false;
+        this.win.webContents.send("compassmot-status", {
+          state: "FAILED",
+        });
+
+        break;
+    }
+  }
+
+  handleCompassMotStatusMessage(msg) {
+    if (!this.compassMotRunning) return;
+
+    // msg fields are automatically parsed by your underlying node MAVLink decoder engine
+    const rawThrottle = msg.throttle; // Standard servo input (1000 - 2000)
+    const amps = msg.current; // Live power consumption from power module
+    const percent = msg.interference; // Live calculated magnetic distortion metric (%)
+
+    this.throttle = rawThrottle;
+    this.currentAmps = amps;
+    this.currentInterference = percent;
+
+    const throttlePercent = Math.round((rawThrottle - 1000) / 10);
+    // Pipe the numeric parameters straight to the frontend charting state arrays
+    this.win.webContents.send("compassmot-status", {
+      state: "ComMotCalTel",
+      current: amps,
+      interference: percent,
+      throttle: throttlePercent,
+    });
+  }
+
+  handleStatusText(text) {
+    if (!this.compassMotRunning) return;
+
+    console.log(` COMPASSMOT STATUSTEXT: ${text}`);
+
+    this.win.webContents.send("compassmot-status", {
+      state: "MESSAGE",
+      text,
+    });
+
+    if (
+      text.toLowerCase().includes("successful") ||
+      text.toLowerCase().includes("complete")
+    ) {
+      console.log(" COMPASSMOT run COMPLETED SUCCESSFULLY");
+      console.log(`Final Interference = ${this.currentInterference}%`);
+      console.log(`Final Current = ${this.currentAmps}A`);
+
+      this.compassMotRunning = false;
+      this.win.webContents.send("compassmot-status", {
+        state: "COMPLETE",
+        interference: this.currentInterference,
+        current: this.currentAmps,
+      });
+    }
+
+    if (text.toLowerCase().includes("failed")) {
+      console.log(" COMPASSMOT TERMINATED BY FC , Failed");
+      this.compassMotRunning = false;
+      this.win.webContents.send("compassmot-status", {
+        state: "FAILED",
+      });
+    }
+  }
+}
+
+
+//////////////////command//////////////////
+
+  async setThrottle(percent) {
+    try {
+      // Convert 0-100% -> PWM 1000-2000
+      const pwm = Math.round(1000 + percent * 10);
+
+      const msg = new common.RcChannelsOverride();
+
+      msg.targetSystem = 76;
+      msg.targetComponent = 1;
+
+      //  all channels unchanged
+      msg.chan1Raw = 65535;
+      msg.chan2Raw = 65535;
+
+      // Throttle channel
+      msg.chan3Raw = pwm;
+
+      msg.chan4Raw = 65535;
+      msg.chan5Raw = 65535;
+      msg.chan6Raw = 65535;
+      msg.chan7Raw = 65535;
+      msg.chan8Raw = 65535;
+
+      await send(this.port, msg, gcsProtocolEngine);
+
+      console.log(`[THROTTLE] percent=${percent}% pwm=${pwm}`);
+    } catch (err) {
+      console.error("[THROTTLE ERROR]", err);
+    }
+  }
+
+  async sendCompassMotCancel() {
+    try {
+      console.log(" COMPASSMOT: Sending cancellation command ...");
+
+      await this.releaseThrottleOverride();
+      console.log("runnedTheReleasedThrottle");
+
+      const msg = new common.CommandLong();
+
+      msg.targetSystem = 76;
+      msg.targetComponent = 1;
+      msg.command = 241; // MAV_CMD_PREFLIGHT_CALIBRATION
+
+      // Zeroing all parameters tells the active task loop manager to immediately stop
+      msg._param1 = 0;
+      msg._param2 = 0;
+      msg._param3 = 0;
+      msg._param4 = 0;
+      msg._param5 = 0;
+      msg._param6 = 0; // 0 forces CompassMot compilation registers to drop
+      msg._param7 = 0;
+
+      await send(this.port, msg, gcsProtocolEngine);
+      console.log("COMPASSMOT: Calibration cancellation command transmitted.");
+    } catch (error) {
+      console.error(
+        "COMPASSMOT: Failed to safely cancel calibration sequence:",
+        error,
+      );
+    }
+  }
+
+  async releaseThrottleOverride() {
+    try {
+      const msg = new common.RcChannelsOverride();
+
+      msg.targetSystem = 76;
+      msg.targetComponent = 1;
+
+      msg.chan1Raw = 65535;
+      msg.chan2Raw = 65535;
+      msg.chan3Raw = 0; //  In ArduPilot, setting a channel to 0 unlocks the override lock condition instantly
+      msg.chan4Raw = 65535;
+      msg.chan5Raw = 65535;
+      msg.chan6Raw = 65535;
+      msg.chan7Raw = 65535;
+      msg.chan8Raw = 65535;
+
+      await send(this.port, msg, gcsProtocolEngine);
+      console.log(
+        " [SAFETY]: Throttle channel override released back to physical RC Transmitter control.",
+      );
+    } catch (err) {
+      console.error(
+        " [SAFETY]: Failed to release throttle tracking link override:",
+        err,
+      );
+    }
+  }
+
+
+
+  /////////////////////////preload/////////////////
+
+    setThrottle: (throttlePercentage) =>
+    ipcRenderer.send("set-throttle", throttlePercentage),
+
+  onCompassMotStatus: (cb) => {
+    const handler = (_, data) => cb(data);
+
+    ipcRenderer.on("compassmot-status", handler);
+
+    return () => ipcRenderer.removeListener("compassmot-status", handler);
+  },
+
+  /////////////////////////temENg///////////
+  import {
+  MavLinkPacketSplitter,
+  MavLinkPacketParser,
+  minimal,
+  common,
+  ardupilotmega,
+} from "node-mavlink";
+
+const REGISTRY = {
+  ...minimal.REGISTRY,
+  ...common.REGISTRY,
+  ...ardupilotmega.REGISTRY,
+};
+
+const WHITELIST_MSGS = [
+  "Attitude",
+  "GlobalPositionInt",
+  "VfrHud",
+  "SysStatus",
+  "ParamValue",
+  "MissionCurrent",
+  "Heartbeat",
+  "PowerStatus",
+  "GpsRawInt",
+  "StatusText",
+  "CommandAck",
+];
+
+const MESSAGE_INTERVALS = {
+  Attitude: 200, // 5 Hz
+  GlobalPositionInt: 500, // 2 Hz
+  VfrHud: 500, // 2 Hz
+  SysStatus: 1000, // 1 Hz
+  ParamValue: 1000, // 1 Hz
+  MissionCurrent: 1000, // 1 Hz
+  Heartbeat: 200,
+  PowerStatus: 1000,
+  GpsRawInt: 200,
+  StatusText: 0,
+  CommandAck: 0,
+};
+
+export class TelemetryEngine {
+  constructor({
+    port,
+    win,
+    flightState,
+    paramService,
+    commandService,
+    hardwareCheck,
+    calibrationService,
+    compassCalibrationService,
+    compassMotCalibrationService,
+  }) {
+    this.port = port;
+    this.win = win;
+    this.flightState = flightState;
+    this.paramService = paramService;
+    this.commandService = commandService;
+    this.hardwareCheck = hardwareCheck;
+    this.calibrationService = calibrationService;
+    this.compassCalibrationService = compassCalibrationService;
+    this.compassMotCalibrationService = compassMotCalibrationService;
+
+    this.splitter = new MavLinkPacketSplitter();
+    this.parser = new MavLinkPacketParser();
+
+    this.onData = this.onData.bind(this);
+    this.onPacket = this.onPacket.bind(this);
+    this.messagesPerSecond = 0;
+    this.totalMessages = 0;
+    this.lastSent = {};
+  }
+
+  start() {
+    this.port.on("data", this.onData);
+    this.splitter.pipe(this.parser);
+    this.parser.on("data", this.onPacket);
+
+    this.parser.on("error", console.error);
+
+    // Print every second
+    this.statsInterval = setInterval(() => {
+      // console.log(` ${this.messagesPerSecond} MAVLink msgs/sec`);
+
+      this.messagesPerSecond = 0;
+    }, 1000);
+
+    console.log(" TelemetryEngine started");
+  }
+
+  stop() {
+    try {
+      this.port?.off("data", this.onData);
+
+      this.splitter?.removeAllListeners();
+      this.parser?.removeAllListeners();
+
+      this.splitter = null;
+      this.parser = null;
+
+      console.log(" TelemetryEngine stopped");
+    } catch (e) {
+      console.error("TelemetryEngine stop error:", e);
+    }
+  }
+
+  onData(chunk) {
+    this.splitter.write(chunk);
+  }
+
+  onPacket(packet) {
+    try {
+      // console.log(
+      //   "[RAW MAVLINK]",
+      //   "msgid=",
+      //   packet.header.msgid,
+      //   "sys=",
+      //   packet.header.systemid,
+      //   "comp=",
+      //   packet.header.componentid,
+      // );
+      this.messagesPerSecond++;
+      this.totalMessages++;
+      if (!packet?.header) return;
+
+      const Clazz = REGISTRY[packet.header.msgid];
+      if (!Clazz) return;
+
+      const msg = packet.protocol.data(packet.payload, Clazz);
+      if (!msg) return;
+
+      const msgType = Clazz.name;
+      // console.log("TELEM ONPACKET:", msgType, "msgid=", packet.header.msgid);
+      // this.hardwareCheck?.processIncomingTelemetry(msgType, msg);
+      // console.log(msg);
+
+      // -------------------------
+      // STATE UPDATES
+      // -------------------------
+      if (packet.header.msgid === 1) {
+        this.flightState?.updateSysStatus(msg);
+      }
+
+      if (packet.header.msgid === 74) {
+        this.flightState?.updateVfrHud(msg);
+      }
+
+      if (packet.header.msgid === 193) {
+        this.flightState?.updateEkfStatus(msg);
+      }
+      if (packet.header.msgid === 0) {
+        this.flightState?.updateHeartbeat(msg);
+      }
+
+      if (packet.header.msgid === 33) {
+        this.flightState?.updatePosition(msg);
+      }
+
+      if (packet.header.msgid === 177) {
+        this.compassMotCalibrationService?.handleCompassMotStatusMessage(msg);
+      }
+
+      if (packet.header.msgid === 24) {
+        this.flightState?.updateGPS(msg);
+      }
+      if (packet.header.msgid === 253) {
+        console.log(
+          `statusText Receving : ${msg.text} , severity : ${msg.severity} `,
+        );
+        console.log(`message: ${msg}`);
+        this.calibrationService?.handleStatusText(msg.text);
+        this.compassMotCalibrationService?.handleStatusText(msg.text);
+        this.win.webContents.send("telemetry", {
+          type: "StatusText",
+          data: msg,
+          sentAt: Date.now(),
+        });
+      }
+
+      if (packet.header.msgid === 76) {
+        // COMMAND_LONG
+        const cmdLong = packet.protocol.data(
+          packet.payload,
+          common.CommandLong,
+        );
+
+        // If the drone is sending command 42429, it's telling us what position it wants!
+        if (
+          cmdLong.command === 42429 &&
+          this.calibrationService?.state.active
+        ) {
+          console.log(
+            `[DRONE SOURCE] Drone is explicitly requesting position index: ${cmdLong._param1}`,
+          );
+          this.calibrationService.handleDroneRequestedPosition(cmdLong._param1);
+        }
+      }
+
+      if (packet.header.msgid === 77) {
+        console.log("this message is from command_ack", msg);
+        console.log(
+          ` [DRONE ACK RESULT] Received response for command ${msg.command}. Result code is: ${msg.result}`,
+          msg,
+        );
+        const command = msg.command;
+        const result = msg.result;
+
+        let status = "UNKNOWN";
+
+        switch (result) {
+          case 0:
+            status = "ACCEPTED";
+            break;
+
+          case 1:
+            status = "TEMP_REJECTED";
+            break;
+          case 2:
+            status = "DENIED";
+            break;
+          case 3:
+            status = "UNSUPPORTED";
+            break;
+          case 4:
+            status = "FAILED";
+            break;
+        }
+
+        this.flightState?.updateAck(command, status);
+
+        this.commandService?.onAck(command, status);
+
+        // this.calibrationService?.handleAck(command, result);
+
+        this.compassCalibrationService?.handleAck(command, result);
+
+        this.compassMotCalibrationService?.handleAck(command, result);
+      }
+
+      if (msgType === "MagCalProgress") {
+        console.log("Received MagCalProgress ", msgType);
+        this.compassCalibrationService?.handleProgress(msg);
+      }
+
+      if (msgType === "MagCalReport") {
+        console.log("Received MagCalReport", msgType);
+        this.compassCalibrationService?.handleReport(msg);
+      }
+
+      this.paramService?.handle?.(msg);
+
+      const now = Date.now();
+
+      if (!WHITELIST_MSGS.includes(msgType)) return;
+
+      // Throttle messages
+      const interval = MESSAGE_INTERVALS[msgType] || 1000;
+      if (this.lastSent[msgType] && now - this.lastSent[msgType] < interval) {
+        return; // skip sending
+      }
+      this.lastSent[msgType] = now;
+      this.hardwareCheck?.processIncomingTelemetry(msgType, msg);
+      // this.lastSent[msgType] = now;
+
+      const sentAt = Date.now();
+
+      // Send telemetry to UI
+      this.win.webContents.send("telemetry", {
+        type: msgType,
+        data: msg,
+        sentAt,
+      });
+    } catch (err) {
+      console.error("Telemetry decode error:", err);
+    }
+  }
+}
+////////////////////////main///////////////
+ipcMain.on("start-compassmot-calibration", async () => {
+  console.log(" IPC START COMPASSMOT");
+
+  await compassMotCalibrationService?.startCompassMot();
+});
+
+ipcMain.on("set-throttle", async (_, throttlePercentage) => {
+  await compassMotCalibrationService?.handleUserThrottleInput(
+    throttlePercentage,
+  );
+});
+//////////////////////compassmotorcalibration.jsx////////////////////
+// import React from "react";
+
+// const CompassMotorCalibration = () => {
+//   return <div>CompassMotorCalibration</div>;
+// };
+
+// export default CompassMotorCalibration;
+
+import CompassMotCalibrationGraph from "@/components/calibration/CompassMotCalibrationGraph";
+import React, { useState, useEffect, useRef } from "react";
+
+const CompassMotorCalibration = () => {
+  const [calibrationState, setCalibrationState] = useState("IDLE"); // IDLE, STARTING, ACCEPTED, RUNNING, COMPLETE, FAILED
+  const [statusLog, setStatusLog] = useState([]);
+  const [currentAmps, setCurrentAmps] = useState(0);
+  const [interference, setInterference] = useState(0);
+  const [throttle, setThrottle] = useState(0);
+
+  const logEndRef = useRef(null);
+
+  useEffect(() => {
+    if (logEndRef.current) {
+      logEndRef.current.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [statusLog]);
+
+  useEffect(() => {
+    if (!window.electron || !window.electron.onCompassMotStatus) {
+      console.warn(
+        " IPC channel 'onCompassMotStatus' not found. Ensure preload script is active.",
+      );
+      return;
+    }
+
+    // Subscribe to backend status updates emitted from TelemetryEngine / CalibrationService
+    const unsubscribe = window.electron.onCompassMotStatus((data) => {
+      switch (data.state) {
+        case "STARTING":
+          setCalibrationState("STARTING");
+          setCurrentAmps(0);
+          setInterference(0);
+          setStatusLog(["[SYSTEM]: Initializing CompassMot Sequence..."]);
+          break;
+
+        case "ACCEPTED":
+          setCalibrationState("ACCEPTED");
+          setStatusLog((prev) => [
+            ...prev,
+            " Command Accepted by Flight Controller. Secure vehicle and safely raise throttle.",
+          ]);
+          break;
+
+        case "MESSAGE":
+          setCalibrationState("RUNNING");
+          setStatusLog((prev) => [...prev, `📡 FC: ${data.text}`]);
+          break;
+
+        case "CURRENT":
+          setCurrentAmps(data.current);
+          break;
+
+        case "INTERFERENCE":
+          setInterference(data.percent);
+          break;
+
+        case "COMPLETE":
+          setCalibrationState("COMPLETE");
+          setInterference(data.interference);
+          setCurrentAmps(data.current);
+          setStatusLog((prev) => [
+            ...prev,
+            ` CALIBRATION SUCCESSFUL! Final Interference: ${data.interference}%, Max Current: ${data.current}A.`,
+          ]);
+          break;
+
+        case "FAILED":
+          setCalibrationState("FAILED");
+          setStatusLog((prev) => [
+            ...prev,
+            " CALIBRATION FAILED. Check motor connections or throttle range parameters.",
+          ]);
+          break;
+
+        default:
+          break;
+      }
+    });
+
+    // Clean up MAVLink IPC event listener on component unmount to prevent memory leaks
+    return () => unsubscribe();
+  }, []);
+
+  const handleStartCalibration = () => {
+    if (window.electron && window.electron.startCompassMotCalibration) {
+      window.electron.startCompassMotCalibration();
+    } else {
+      console.error(
+        " Preload execution function 'startCompassMotCalibration' is missing.",
+      );
+    }
+  };
+
+  const handleThrottleChange = (e) => {
+    // const value = Number(e.target.value);
+    const value = e.target.value;
+    setThrottle(value);
+    window.electron.setThrottle(throttle);
+    console.log(throttle);
+  };
+
+  const getFeedbackColor = (pct) => {
+    if (pct <= 10) return "#10B981"; // Green (Excellent)
+    if (pct <= 30) return "#F59E0B"; // Yellow (Acceptable, minor interference)
+    return "#EF4444"; // Red (Critical, relocate hardware compass)
+  };
+
+  // Determine helper message strings based on test status
+  const getBannerText = () => {
+    switch (calibrationState) {
+      case "STARTING":
+        return "Contacting Flight Controller...";
+      case "ACCEPTED":
+        return "Ready. Safely raise throttle to max and lower it.";
+      case "RUNNING":
+        return "Calibrating. Reading real-time electromagnetic offsets...";
+      case "COMPLETE":
+        return "Calibration complete! Parameters burned to EEPROM.";
+      case "FAILED":
+        return "Test failed or canceled by autopilot safety systems.";
+      default:
+        return "Ready to begin ground test hardware routine.";
+    }
+  };
+
+  const isButtonsDisabled =
+    calibrationState === "STARTING" ||
+    calibrationState === "RUNNING" ||
+    calibrationState === "ACCEPTED";
+
+  return (
+    <div style={styles.container}>
+      {/* Module Title Context */}
+      <div style={styles.header}>
+        <h2 style={styles.title}> Compass/Motor Calibration (CompassMot)</h2>
+        <p style={styles.subtitle}>
+          Calibrate the magnetometer against power line magnetic field
+          distortions.
+        </p>
+      </div>
+
+      {/* Main Telemetry Tele-Gauges Dashboard */}
+      <div style={styles.dashboard}>
+        <div style={styles.metricsContainer}>
+          <div style={styles.card}>
+            <span style={styles.cardLabel}> Current Draw</span>
+            <div style={styles.cardValue}>
+              {currentAmps.toFixed(1)} <span style={styles.unit}>A</span>
+            </div>
+          </div>
+
+          <div style={styles.card}>
+            <span style={styles.cardLabel}> Magnetic Interference</span>
+            <div
+              style={{
+                ...styles.cardValue,
+                color: getFeedbackColor(interference),
+              }}
+            >
+              {interference}
+              <span style={styles.unit}>%</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Dynamic Context Status Banner */}
+        <div
+          style={{ ...styles.stateBanner, ...bannerColors[calibrationState] }}
+        >
+          <strong>[{calibrationState}]</strong> {getBannerText()}
+        </div>
+
+        {/* Action Ignition Button Trigger */}
+        <button
+          onClick={handleStartCalibration}
+          disabled={isButtonsDisabled}
+          style={{
+            ...styles.button,
+            backgroundColor: isButtonsDisabled ? "#4B5563" : "#2563EB",
+            cursor: isButtonsDisabled ? "not-allowed" : "pointer",
+          }}
+        >
+          {calibrationState === "RUNNING"
+            ? "Processing MAVLink Data streams..."
+            : "Start Calibration Sequence"}
+        </button>
+      </div>
+
+      {/* Real-Time Telemetry Event Logger Terminal */}
+      <div style={styles.logContainer}>
+        <h4 style={styles.logTitle}>
+          Live Telemetry Logs (STATUSTEXT Decodes)
+        </h4>
+        <div style={styles.logBox}>
+          {statusLog.length === 0 && (
+            <span style={styles.emptyLog}>
+              Awaiting ground control initialization...
+            </span>
+          )}
+          {statusLog.map((log, index) => (
+            <div key={index} style={styles.logLine}>
+              {log}
+            </div>
+          ))}
+          <div ref={logEndRef} />
+        </div>
+      </div>
+
+      <div className="mt-7 max-w rounded-xl border border-slate-500 bg-slate-950 p-4 shadow-sm">
+        <div className="flex items-center justify-between pb-2">
+          <label className="text-sm font-medium text-slate-400">
+            Motor Throttle
+          </label>
+          <span className="rounded-md bg-slate-500 px-2 py-0.5 text-xs font-semibold text-slate-200">
+            {throttle}%
+          </span>
+        </div>
+        <input
+          type="range"
+          min={0}
+          max={100}
+          value={throttle}
+          onChange={handleThrottleChange}
+          className="w-full cursor-pointer h-2 accent-blue-600 bg-slate-200 rounded-lg"
+        />
+      </div>
+
+      <div>{/* <CompassMotCalibrationGraph /> */}</div>
+    </div>
+  );
+};
+
+// Ground Control Station Dark Theme CSS Styles
+const styles = {
+  container: {
+    padding: "24px",
+    backgroundColor: "#111827",
+    color: "#F9FAFB",
+    fontFamily: "Segoe UI, Roboto, Helvetica, sans-serif",
+    borderRadius: "12px",
+    maxWidth: "600px",
+    margin: "20px auto",
+    boxShadow: "0 4px 6px -1px rgba(0, 0, 0, 0.5)",
+  },
+  header: {
+    borderBottom: "1px solid #374151",
+    paddingBottom: "14px",
+    marginBottom: "20px",
+  },
+  title: {
+    margin: "0 0 6px 0",
+    fontSize: "20px",
+    fontWeight: "600",
+    color: "#F3F4F6",
+  },
+  subtitle: {
+    margin: "0",
+    color: "#9CA3AF",
+    fontSize: "13px",
+    lineHeight: "1.4",
+  },
+  dashboard: { display: "flex", flexDirection: "column", gap: "16px" },
+  metricsContainer: { display: "flex", gap: "16px" },
+  card: {
+    flex: 1,
+    backgroundColor: "#1F2937",
+    padding: "16px",
+    borderRadius: "8px",
+    border: "1px solid #374151",
+  },
+  cardLabel: {
+    display: "block",
+    color: "#9CA3AF",
+    fontSize: "11px",
+    fontWeight: "600",
+    textTransform: "uppercase",
+    letterSpacing: "0.05em",
+    marginBottom: "8px",
+  },
+  cardValue: { fontSize: "36px", fontWeight: "700", color: "#F9FAFB" },
+  unit: {
+    fontSize: "16px",
+    fontWeight: "500",
+    color: "#9CA3AF",
+    marginLeft: "2px",
+  },
+  stateBanner: {
+    padding: "12px",
+    borderRadius: "6px",
+    fontSize: "13px",
+    textAlign: "left",
+    display: "block",
+    transition: "all 0.3s ease",
+  },
+  button: {
+    width: "100%",
+    padding: "14px",
+    color: "#FFFFFF",
+    border: "none",
+    borderRadius: "6px",
+    fontWeight: "600",
+    fontSize: "14px",
+    transition: "background-color 0.2s ease",
+  },
+  logContainer: { marginTop: "24px" },
+  logTitle: {
+    margin: "0 0 8px 0",
+    fontSize: "13px",
+    fontWeight: "600",
+    color: "#9CA3AF",
+  },
+  logBox: {
+    backgroundColor: "#030712",
+    padding: "12px",
+    borderRadius: "6px",
+    height: "150px",
+    overflowY: "auto",
+    border: "1px solid #1F2937",
+    fontFamily: "Consolas, Monaco, monospace",
+    fontSize: "12px",
+    lineHeight: "1.6",
+  },
+  emptyLog: { color: "#4B5563", fontStyle: "italic" },
+  logLine: {
+    marginBottom: "4px",
+    color: "#34D399",
+    borderLeft: "2px solid #10B981",
+    paddingLeft: "6px",
+  },
+};
+
+const bannerColors = {
+  IDLE: {
+    backgroundColor: "#374151",
+    color: "#F3F4F6",
+    border: "1px solid #4B5563",
+  },
+  STARTING: {
+    backgroundColor: "#1E3A8A",
+    color: "#93C5FD",
+    border: "1px solid #2563EB",
+  },
+  ACCEPTED: {
+    backgroundColor: "#065F46",
+    color: "#A7F3D0",
+    border: "1px solid #059669",
+  },
+  RUNNING: {
+    backgroundColor: "#78350F",
+    color: "#FDE68A",
+    border: "1px solid #D97706",
+  },
+  COMPLETE: {
+    backgroundColor: "#065F46",
+    color: "#A7F3D0",
+    border: "2px solid #10B981",
+  },
+  FAILED: {
+    backgroundColor: "#7F1D1D",
+    color: "#FCA5A5",
+    border: "2px solid #EF4444",
+  },
+};
+
+export default CompassMotorCalibration;
+//////////////////compassmotcalibrationGraph//////////////////
+
+import React, { useState, useEffect } from "react";
+import {
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+} from "recharts";
+
+const CompassMotCalibrationGraph = () => {
+  const [currentAmps, setCurrentAmps] = useState(0);
+  const [interference, setInterference] = useState(0);
+  const [throttle, setThrottle] = useState(0);
+  const [chartData, setChartData] = useState([]);
+
+  useEffect(() => {
+    if (!window.electron || !window.electron.onCompassMotStatus) return;
+
+    const unsubscribe = window.electron.onCompassMotStatus((data) => {
+      switch (data.state) {
+        case "ComMotCalTel": {
+          // Fallback to 0 if data.throttle is not provided by the autopilot packet
+          const targetThrottle =
+            data.throttle !== undefined ? data.throttle : 0;
+
+          setCurrentAmps(data.current);
+          setInterference(data.interference);
+          setThrottle(targetThrottle);
+
+          setChartData((prevData) => {
+            const newPoint = {
+              throttle: targetThrottle,
+              current: Number(data.current.toFixed(1)),
+              interference: data.interference,
+            };
+
+            // Filter duplicates on matching throttle keys to keep the line smooth
+            const existingIndex = prevData.findIndex(
+              (item) => item.throttle === newPoint.throttle,
+            );
+            let updatedData = [...prevData];
+
+            if (existingIndex !== -1) {
+              updatedData[existingIndex] = newPoint;
+            } else {
+              updatedData.push(newPoint);
+            }
+
+            return updatedData.sort((a, b) => a.throttle - b.throttle);
+          });
+          break;
+        }
+        default:
+          break;
+      }
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  return (
+    <div className="p-6 bg-slate-950 text-slate-100 rounded-xl max-w-xl mx-auto font-mono">
+      {/* Metrics Header Gauges */}
+      <div className="grid grid-cols-3 gap-4 mb-6">
+        <div className="bg-slate-900 p-4 rounded-lg border border-slate-800">
+          <div className="text-xs text-slate-400 uppercase font-semibold">
+            Throttle
+          </div>
+          <div className="text-3xl font-bold mt-1 text-sky-400">
+            {throttle}
+            <span className="text-sm text-slate-400 ml-1">%</span>
+          </div>
+        </div>
+        <div className="bg-slate-900 p-4 rounded-lg border border-slate-800">
+          <div className="text-xs text-slate-400 uppercase font-semibold">
+            Current Draw
+          </div>
+          <div className="text-3xl font-bold mt-1 text-amber-500">
+            {currentAmps.toFixed(1)}
+            <span className="text-sm text-slate-400 ml-1">A</span>
+          </div>
+        </div>
+        <div className="bg-slate-900 p-4 rounded-lg border border-slate-800">
+          <div className="text-xs text-slate-400 uppercase font-semibold">
+            Interference
+          </div>
+          <div className="text-3xl font-bold mt-1 text-emerald-400">
+            {interference}
+            <span className="text-sm text-slate-400 ml-1">%</span>
+          </div>
+        </div>
+      </div>
+
+      {/* RECHARTS PLOTTING ELEMENT */}
+      <div className="bg-slate-900 p-4 rounded-lg border border-slate-800 h-64">
+        <ResponsiveContainer width="100%" height="100%">
+          <LineChart
+            data={chartData}
+            margin={{ top: 5, right: -10, left: -10, bottom: 0 }}
+          >
+            <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
+
+            {/* Throttle X Axis */}
+            <XAxis
+              dataKey="throttle"
+              type="number"
+              domain={[0, 100]}
+              stroke="#64748B"
+              unit="%"
+            />
+
+            {/* Left Y Axis: Interference */}
+            <YAxis
+              yAxisId="left"
+              dataKey="interference"
+              type="number"
+              domain={[0, 100]}
+              stroke="#10B981"
+              unit="%"
+            />
+
+            {/* Right Y Axis: Current Amps */}
+            <YAxis
+              yAxisId="right"
+              orientation="right"
+              dataKey="current"
+              type="number"
+              domain={[0, "dataMax + 5"]}
+              stroke="#F59E0B"
+              unit="A"
+            />
+
+            <Tooltip
+              contentStyle={{
+                backgroundColor: "#1E293B",
+                borderColor: "#475569",
+              }}
+            />
+
+            {/* Interference Line linked to Left Axis */}
+            <Line
+              yAxisId="left"
+              type="monotone"
+              dataKey="interference"
+              stroke="#10B981"
+              strokeWidth={3}
+              dot={{ r: 2, fill: "#34D399" }}
+              isAnimationActive={false}
+            />
+
+            {/* Current Line linked to Right Axis */}
+            <Line
+              yAxisId="right"
+              type="monotone"
+              dataKey="current"
+              stroke="#F59E0B"
+              strokeWidth={3}
+              dot={{ r: 2, fill: "#FBBF24" }}
+              isAnimationActive={false}
+            />
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+    </div>
+  );
+};
+
+export default CompassMotCalibrationGraph;
+
+
+...................................................
+
+
+
+
+
+
+
+import { common, send } from "node-mavlink";
+
+async sendCompassMotCancel() {
+  console.log("COMPASSMOT CANCEL");
+
+  const ack = new common.CommandAck();
+
+  ack.command = 241; // MAV_CMD_PREFLIGHT_CALIBRATION
+  ack.result = 0;    // MAV_RESULT_ACCEPTED
+
+  await send(this.port, ack, this.gcsProtocolVersion);
+
+  await new Promise(resolve => setTimeout(resolve, 20));
+
+  await send(this.port, ack, this.gcsProtocolVersion);
+
+  console.log("COMPASSMOT CANCEL ACK SENT");
+}
+
+
+////////////////////////////////
+
+async sendCompassMotCancel() {
+  try {
+    const ack = new common.CommandAck();
+
+    ack.command = 241; // MAV_CMD_PREFLIGHT_CALIBRATION
+    ack.result = 0;    // MAV_RESULT_ACCEPTED
+
+    console.log(
+      "TX",
+      ack.constructor.name,
+      "command=",
+      ack.command,
+      "result=",
+      ack.result,
+    );
+
+    await send(this.port, ack, gcsProtocolEngine);
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    console.log(
+      "TX",
+      ack.constructor.name,
+      "command=",
+      ack.command,
+      "result=",
+      ack.result,
+    );
+
+    await send(this.port, ack, gcsProtocolEngine);
+
+    console.log("COMPASSMOT CANCEL ACK SENT");
+  } catch (err) {
+    console.error(err);
+  }
+}
+
+//////////////////////////////////
+
+1. Add continuous throttle override
+
+In CompassMotCalibrationService:
+
+export class CompassMotCalibrationService {
+  constructor(commandService, win) {
+    this.commandService = commandService;
+    this.win = win;
+
+    this.compassMotRunning = false;
+
+    this.throttle = 0;
+
+    this.overrideTimer = null;
+  }
+
+  startThrottleOverrideLoop() {
+    if (this.overrideTimer) {
+      clearInterval(this.overrideTimer);
+    }
+
+    this.overrideTimer = setInterval(() => {
+      if (!this.compassMotRunning) return;
+
+      this.commandService.setThrottle(this.throttle);
+    }, 100); // 10 Hz
+  }
+
+  stopThrottleOverrideLoop() {
+    if (this.overrideTimer) {
+      clearInterval(this.overrideTimer);
+      this.overrideTimer = null;
+    }
+  }
+}
+2. Store throttle value only
+
+Change:
+
+handleUserThrottleInput(throttlePercentage) {
+  if (!this.compassMotRunning) return;
+
+  if (this.commandService.setThrottle) {
+    this.commandService.setThrottle(throttlePercentage);
+  }
+}
+
+to:
+
+handleUserThrottleInput(throttlePercentage) {
+  if (!this.compassMotRunning) return;
+
+  // safety clamp during testing
+  this.throttle = Math.min(Number(throttlePercentage), 80);
+}
+
+The loop will send it repeatedly.
+
+3. Start loop when calibration starts
+
+Inside:
+
+async startCompassMot()
+
+after:
+
+this.compassMotRunning = true;
+
+add:
+
+this.startThrottleOverrideLoop();
+4. Stop loop when calibration finishes
+
+Inside:
+
+if (
+  text.toLowerCase().includes("successful") ||
+  text.toLowerCase().includes("complete")
+)
+
+add:
+
+this.stopThrottleOverrideLoop();
+
+await this.commandService.releaseThrottleOverride();
+
+before:
+
+this.compassMotRunning = false;
+5. Stop loop when calibration fails
+
+Inside:
+
+if (text.toLowerCase().includes("failed"))
+
+add:
+
+this.stopThrottleOverrideLoop();
+
+await this.commandService.releaseThrottleOverride();
+6. Stop loop on ACK failure
+
+Inside:
+
+case 4:
+
+add:
+
+this.stopThrottleOverrideLoop();
+
+await this.commandService.releaseThrottleOverride();
+
+before:
+
+this.compassMotRunning = false;
+7. Stop loop on manual cancel
+
+Inside:
+
+async stopCompassMot()
+
+add:
+
+this.stopThrottleOverrideLoop();
+
+await this.commandService.releaseThrottleOverride();
+
+before sending the cancel ACK.
+
+8. Fix React slider bug
+
+Current:
+
+const value = e.target.value;
+
+setThrottle(value);
+
+window.electron.setThrottle(throttle);
+
+Replace with:
+
+const value = Number(e.target.value);
+
+setThrottle(value);
+
+window.electron.setThrottle(value);
+
+This is mandatory because your current code sends stale values.
+
+9. Verify RC channel mapping
+
+You're currently doing:
+
+msg.chan3Raw = pwm;
+
+which assumes:
+
+RC3 = Throttle
+
+Before flight testing, check parameter:
+
+RCMAP_THROTTLE
+
+on the flight controller.
+
+Typical Copter:
+
+RCMAP_THROTTLE = 3
+
+If it's anything else, your slider will move the wrong channel.
+
+One more improvement
+
+Add logging in setThrottle():
+
+console.log(
+  `[THROTTLE TX] percent=${percent} pwm=${pwm}`
+);
+
+and in handleCompassMotStatusMessage():
+
+console.log(
+  `[COMP
+For immediate assistance, please email our customer support: support@toptal.com
+

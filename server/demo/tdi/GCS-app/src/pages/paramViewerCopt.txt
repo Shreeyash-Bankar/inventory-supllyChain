@@ -1,0 +1,776 @@
+// import { useEffect, useMemo, useState } from "react";
+// import { Button } from "../components/ui/button";
+// import { Input } from "../components/ui/input";
+// import { Card } from "../components/ui/card";
+
+// // simple UI feedback (replace later with toast system)
+// function notify(type, msg) {
+//   console.log(`[${type.toUpperCase()}]`, msg);
+// }
+
+// export default function ParamViewer() {
+//   const [params, setParams] = useState({});
+//   const [meta, setMeta] = useState({});
+//   const [editing, setEditing] = useState({});
+//   const [drafts, setDrafts] = useState({});
+//   const [loading, setLoading] = useState(false);
+//   const [total, setTotal] = useState(null);
+
+//   // -----------------------------
+//   // INIT LOAD
+//   // -----------------------------
+//   useEffect(() => {
+//     let alive = true;
+
+//     const load = async () => {
+//       try {
+//         setLoading(true);
+
+//         const m = await window.electron.getParamMeta();
+//         if (!alive) return;
+//         setMeta(m || {});
+
+//         await window.electron.requestParams();
+//       } catch (err) {
+//         notify("error", "Failed to load parameters");
+//         setLoading(false);
+//       }
+//     };
+
+//     load();
+
+//     // -----------------------------
+//     // LIVE PARAM STREAM
+//     // -----------------------------
+//     const unsubParam = window.electron.onParam((msg) => {
+//       if (!msg?.id) return;
+
+//       setParams((prev) => {
+//         const existing = prev[msg.id] || {};
+
+//         return {
+//           ...prev,
+//           [msg.id]: {
+//             ...existing,
+//             id: msg.id,
+//             value: msg.value,
+//             type: msg.type ?? existing.type,
+//             index: msg.index ?? existing.index,
+//           },
+//         };
+//       });
+//     });
+
+//     // -----------------------------
+//     // COMPLETE SNAPSHOT
+//     // -----------------------------
+//     const unsubComplete = window.electron.onParamComplete((msg) => {
+//       setParams(msg.params || {});
+//       setTotal(msg.total || Object.keys(msg.params || {}).length);
+//       setLoading(false);
+//       notify("success", `Loaded ${msg.total} parameters`);
+//     });
+
+//     return () => {
+//       alive = false;
+//       unsubParam?.();
+//       unsubComplete?.();
+//     };
+//   }, []);
+
+//   const TYPE_MAP = {
+//     2: "UINT8",
+//     3: "INT16",
+//     4: "INT32",
+//     5: "UINT32",
+//     6: "FLOAT",
+//     7: "DOUBLE",
+//     9: "FLOAT",
+//   };
+
+//   // -----------------------------
+//   // GROUP BY CATEGORY (SAFE)
+//   // -----------------------------
+//   const grouped = useMemo(() => {
+//     const groups = {};
+
+//     for (const [key, param] of Object.entries(params)) {
+//       const category = meta[key]?.category || "Uncategorized";
+
+//       if (!groups[category]) groups[category] = [];
+
+//       groups[category].push({
+//         key,
+//         param,
+//       });
+//     }
+
+//     return groups;
+//   }, [params, meta]);
+
+//   // -----------------------------
+//   // SAVE PARAM (MAVLINK SAFE)
+//   // -----------------------------
+//   const handleSave = async (key) => {
+//     const param = params[key];
+//     const draftValue = drafts[key];
+
+//     if (!param) return;
+
+//     // SAFE TYPE CASTING
+//     let value;
+//     if (param.type === 4) value = parseInt(draftValue);
+//     else if (param.type === 9) value = parseFloat(draftValue);
+//     else value = Number(draftValue);
+
+//     if (Number.isNaN(value)) {
+//       notify("error", "Invalid value");
+//       return;
+//     }
+
+//     const previous = param.value;
+
+//     // optimistic update
+//     setParams((prev) => ({
+//       ...prev,
+//       [key]: { ...prev[key], value },
+//     }));
+
+//     try {
+//       await window.electron.setParam({
+//         id: key,
+//         value,
+//         type: param.type,
+//         index: param.index,
+//       });
+
+//       notify("success", `${key} updated`);
+
+//       setEditing((p) => ({ ...p, [key]: false }));
+//       setDrafts((p) => {
+//         const copy = { ...p };
+//         delete copy[key];
+//         return copy;
+//       });
+//     } catch (err) {
+//       // rollback
+//       setParams((prev) => ({
+//         ...prev,
+//         [key]: { ...prev[key], value: previous },
+//       }));
+
+//       notify("error", `Failed to update ${key}`);
+//     }
+//   };
+
+//   // -----------------------------
+//   // UI
+//   // -----------------------------
+//   return (
+//     <div className="p-4 space-y-4">
+//       <Button onClick={() => window.electron.requestParams()}>
+//         Reload Parameters
+//       </Button>
+
+//       <h2 className="text-xl font-semibold">
+//         MAVLink Parameters ({total || 0})
+//       </h2>
+
+//       {loading && <p className="text-orange-500">Loading...</p>}
+
+//       <div className="space-y-6">
+//         {Object.entries(grouped).map(([category, items]) => (
+//           <div key={category} className="space-y-2">
+//             {/* CATEGORY HEADER */}
+//             <div className="text-lg font-bold text-gray-700">{category}</div>
+
+//             {/* PARAM LIST */}
+//             {items.map(([key, param]) => {
+//               const isEditing = editing[key];
+//               const draftValue = drafts[key] ?? param.value;
+//               const m = meta[key];
+
+//               return (
+//                 <Card key={key} className="p-3 flex flex-col gap-2">
+//                   <div className="flex items-center gap-3">
+//                     {/* NAME */}
+//                     <div className="w-56 font-mono text-sm">{key}</div>
+
+//                     {/* VALUE */}
+//                     <Input
+//                       className="w-32"
+//                       disabled={!isEditing}
+//                       value={draftValue}
+//                       onChange={(e) =>
+//                         setDrafts((prev) => ({
+//                           ...prev,
+//                           [key]: e.target.value,
+//                         }))
+//                       }
+//                     />
+
+//                     {/* TYPE */}
+//                     <div className="w-16 text-xs text-gray-500">
+//                       Type: {TYPE_MAP[param.type] || "UNKNOWN"}
+//                     </div>
+
+//                     {/* INDEX */}
+//                     <div className="w-20 text-xs text-gray-500">
+//                       ID: {param.index ?? "—"}
+//                     </div>
+
+//                     {/* ACTIONS */}
+//                     {!isEditing ? (
+//                       <Button
+//                         variant="outline"
+//                         onClick={() => {
+//                           setEditing((p) => ({ ...p, [key]: true }));
+//                           setDrafts((p) => ({ ...p, [key]: param.value }));
+//                         }}
+//                       >
+//                         Edit
+//                       </Button>
+//                     ) : (
+//                       <>
+//                         <Button onClick={() => handleSave(key)}>Save</Button>
+
+//                         <Button
+//                           variant="ghost"
+//                           onClick={() => {
+//                             setEditing((p) => ({ ...p, [key]: false }));
+//                             setDrafts((p) => {
+//                               const copy = { ...p };
+//                               delete copy[key];
+//                               return copy;
+//                             });
+//                           }}
+//                         >
+//                           Cancel
+//                         </Button>
+//                       </>
+//                     )}
+//                   </div>
+
+//                   {/* DESCRIPTION */}
+//                   <div className="text-xs text-gray-500">
+//                     {m?.description || "No description available"}
+//                   </div>
+
+//                   {/* META INFO */}
+//                   <div className="text-xs text-muted-foreground">
+//                     {m?.unit && `Unit: ${m.unit}`}
+//                     {m?.reboot && " • Reboot required"}
+//                   </div>
+//                 </Card>
+//               );
+//             })}
+//           </div>
+//         ))}
+//       </div>
+//     </div>
+//   );
+// }
+
+import { useEffect, useMemo, useState } from "react";
+import { Button } from "../components/ui/button";
+import { Input } from "../components/ui/input";
+import { Card } from "../components/ui/card";
+
+function notify(type, msg) {
+  console.log(`[${type.toUpperCase()}]`, msg);
+}
+
+export default function ParamViewer() {
+  const [params, setParams] = useState({});
+  const [meta, setMeta] = useState({});
+  const [editing, setEditing] = useState({});
+  const [drafts, setDrafts] = useState({});
+  const [loading, setLoading] = useState(false);
+  const [total, setTotal] = useState(null);
+  const [activeCategory, setActiveCategory] = useState(null);
+  const [search, setSearch] = useState("");
+
+  // ---------------- INIT ----------------
+  useEffect(() => {
+    let alive = true;
+
+    const load = async () => {
+      try {
+        setLoading(true);
+
+        const m = await window.electron.getParamMeta();
+        if (!alive) return;
+        setMeta(m || {});
+
+        await window.electron.requestParams();
+      } catch (err) {
+        notify("error", "Failed to load parameters");
+        setLoading(false);
+      }
+    };
+
+    load();
+
+    const unsubParam = window.electron.onParam((msg) => {
+      if (!msg?.id) return;
+
+      setParams((prev) => {
+        const existing = prev[msg.id] || {};
+
+        return {
+          ...prev,
+          [msg.id]: {
+            ...existing,
+            id: msg.id,
+            value: msg.value,
+            type: msg.type ?? existing.type,
+            index: msg.index ?? existing.index,
+          },
+        };
+      });
+    });
+
+    const unsubComplete = window.electron.onParamComplete((msg) => {
+      setParams(msg.params || {});
+      setTotal(msg.total || Object.keys(msg.params || {}).length);
+      setLoading(false);
+      notify("success", `Loaded ${msg.total} parameters`);
+    });
+
+    return () => {
+      alive = false;
+      unsubParam?.();
+      unsubComplete?.();
+    };
+  }, []);
+
+  const ParamRow = ({ key, param }) => {
+    const isEditing = editing[key];
+    const draftValue = drafts[key] ?? param.value;
+    const m = meta[key];
+
+    return (
+      <Card className="p-3 flex flex-col gap-2">
+        <div className="flex items-center gap-3">
+          <div className="w-56 font-mono text-sm">{key}</div>
+
+          <Input
+            className="w-32"
+            disabled={!isEditing}
+            value={draftValue}
+            onChange={(e) =>
+              setDrafts((p) => ({
+                ...p,
+                [key]: e.target.value,
+              }))
+            }
+          />
+
+          <div className="w-20 text-xs text-gray-500">
+            {TYPE_MAP[param.type] || "UNKNOWN"}
+          </div>
+
+          <div className="w-20 text-xs text-gray-500">
+            ID: {param.index ?? "—"}
+          </div>
+
+          {!isEditing ? (
+            <Button
+              variant="outline"
+              onClick={() => {
+                setEditing((p) => ({ ...p, [key]: true }));
+                setDrafts((p) => ({ ...p, [key]: param.value }));
+              }}
+            >
+              Edit
+            </Button>
+          ) : (
+            <>
+              <Button onClick={() => handleSave(key)}>Save</Button>
+              <Button
+                variant="ghost"
+                onClick={() => setEditing((p) => ({ ...p, [key]: false }))}
+              >
+                Cancel
+              </Button>
+            </>
+          )}
+        </div>
+
+        <div className="text-xs text-gray-500">
+          {m?.description || "No description available"}
+        </div>
+      </Card>
+    );
+  };
+
+  // ---------------- GROUPING ----------------
+  const grouped = useMemo(() => {
+    const groups = {};
+
+    for (const [key, param] of Object.entries(params)) {
+      const category = meta[key]?.category || "Uncategorized";
+
+      if (!groups[category]) groups[category] = [];
+
+      groups[category].push({ key, param });
+    }
+
+    return groups;
+  }, [params, meta]);
+
+  // ---------------- SET DEFAULT TAB ----------------
+  useEffect(() => {
+    const cats = Object.keys(grouped);
+
+    if (!activeCategory && cats.length > 0) {
+      setActiveCategory(cats[0]);
+    }
+  }, [grouped, activeCategory]);
+
+  // ---------------- TYPE MAP ----------------
+  const TYPE_MAP = {
+    2: "UINT8",
+    3: "INT16",
+    4: "INT32",
+    5: "UINT32",
+    6: "FLOAT",
+    7: "DOUBLE",
+    9: "FLOAT",
+  };
+
+  // ---------------- SAVE ----------------
+  const handleSave = async (key) => {
+    const param = params[key];
+    const draftValue = drafts[key];
+
+    if (!param) return;
+
+    let value;
+    if (param.type === 4) value = parseInt(draftValue);
+    else if (param.type === 9) value = parseFloat(draftValue);
+    else value = Number(draftValue);
+
+    if (Number.isNaN(value)) {
+      notify("error", "Invalid value");
+      return;
+    }
+
+    const previous = param.value;
+
+    setParams((prev) => ({
+      ...prev,
+      [key]: { ...prev[key], value },
+    }));
+
+    try {
+      await window.electron.setParam({
+        id: key,
+        value,
+        type: param.type,
+        index: param.index,
+      });
+
+      notify("success", `${key} updated`);
+
+      setEditing((p) => ({ ...p, [key]: false }));
+      setDrafts((p) => {
+        const copy = { ...p };
+        delete copy[key];
+        return copy;
+      });
+    } catch (err) {
+      setParams((prev) => ({
+        ...prev,
+        [key]: { ...prev[key], value: previous },
+      }));
+
+      notify("error", `Failed to update ${key}`);
+    }
+  };
+
+  //-----------------searching---------
+  const filteredParams = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return null;
+
+    return Object.entries(params)
+      .filter(([key, param]) => {
+        const m = meta[key];
+
+        return (
+          key.toLowerCase().includes(q) ||
+          String(param.value).toLowerCase().includes(q) ||
+          m?.description?.toLowerCase().includes(q) ||
+          (m?.category || "").toLowerCase().includes(q)
+        );
+      })
+      .map(([key, param]) => ({
+        key,
+        param,
+        category: meta[key]?.category || key.split("_")[0] || "Other",
+      }));
+  }, [search, params, meta]);
+
+  const visibleGroups = useMemo(() => {
+    const q = search.trim().toLowerCase();
+
+    // no search → normal behavior
+    if (!q) return grouped;
+
+    const filtered = {};
+
+    for (const [category, items] of Object.entries(grouped)) {
+      const matches = items.filter(({ key, param }) => {
+        const m = meta[key];
+
+        return (
+          key.toLowerCase().includes(q) ||
+          String(param.value).toLowerCase().includes(q) ||
+          m?.description?.toLowerCase().includes(q) ||
+          category.toLowerCase().includes(q)
+        );
+      });
+
+      if (matches.length) {
+        filtered[category] = matches;
+      }
+    }
+
+    return filtered;
+  }, [search, grouped, meta]);
+
+  // ---------------- UI ----------------
+  return (
+    <div className="p-4 space-y-4">
+      <Button onClick={() => window.electron.requestParams()}>
+        Reload Parameters
+      </Button>
+
+      <h2 className="text-xl font-semibold">
+        MAVLink Parameters ({total || 0})
+      </h2>
+
+      {loading && <p className="text-orange-500">Loading...</p>}
+      <Input
+        placeholder="Search parameters..."
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+      />
+      {/* TABS */}
+      <div className="flex gap-2 flex-wrap border-b pb-2">
+        {/* {Object.keys(grouped).map((cat) => (
+          <Button
+            key={cat}
+            variant={cat === activeCategory ? "default" : "outline"}
+            onClick={() => setActiveCategory(cat)}
+          >
+            {cat} ({grouped[cat].length})
+          </Button>
+        ))} */}
+        {search ? null : (
+          <div className="flex gap-2 flex-wrap border-b pb-2">
+            {Object.keys(grouped).map((cat) => (
+              <Button
+                key={cat}
+                variant={cat === activeCategory ? "default" : "outline"}
+                onClick={() => setActiveCategory(cat)}
+              >
+                {cat} ({grouped[cat].length})
+              </Button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* ACTIVE CATEGORY LIST */}
+      {/* <div className="space-y-3">
+        {(grouped[activeCategory] || []).map(({ key, param }) => {
+          const isEditing = editing[key];
+          const draftValue = drafts[key] ?? param.value;
+          const m = meta[key];
+
+          return (
+            <Card key={key} className="p-3 flex flex-col gap-2">
+              <div className="flex items-center gap-3">
+                <div className="w-56 font-mono text-sm">{key}</div>
+
+                <Input
+                  className="w-32"
+                  disabled={!isEditing}
+                  value={draftValue}
+                  onChange={(e) =>
+                    setDrafts((p) => ({
+                      ...p,
+                      [key]: e.target.value,
+                    }))
+                  }
+                />
+
+                <div className="w-20 text-xs text-gray-500">
+                  {TYPE_MAP[param.type] || "UNKNOWN"}
+                </div>
+
+                <div className="w-20 text-xs text-gray-500">
+                  IDX: {param.index ?? "—"}
+                </div>
+
+                {!isEditing ? (
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      setEditing((p) => ({ ...p, [key]: true }));
+                      setDrafts((p) => ({ ...p, [key]: param.value }));
+                    }}
+                  >
+                    Edit
+                  </Button>
+                ) : (
+                  <>
+                    <Button onClick={() => handleSave(key)}>Save</Button>
+
+                    <Button
+                      variant="ghost"
+                      onClick={() => {
+                        setEditing((p) => ({ ...p, [key]: false }));
+                      }}
+                    >
+                      Cancel
+                    </Button>
+                  </>
+                )}
+              </div>
+
+              <div className="text-xs text-gray-500">
+                {m?.description || "No description available"}
+              </div>
+
+              <div className="text-xs text-muted-foreground">
+                {m?.unit && `Unit: ${m.unit}`}
+                {m?.reboot && " • Reboot required"}
+              </div>
+            </Card>
+          );
+        })}
+      </div> */}
+
+      <div className="space-y-3">
+        {search
+          ? // 🔍 SEARCH MODE (all categories flattened visually)
+            Object.entries(visibleGroups).map(([category, items]) => (
+              <div key={category} className="space-y-2">
+                <div className="text-sm font-bold text-gray-500">
+                  {category}
+                </div>
+
+                {items.map(({ key, param }) => {
+                  const isEditing = editing[key];
+                  const draftValue = drafts[key] ?? param.value;
+                  const m = meta[key];
+
+                  return (
+                    <Card key={key} className="p-3 flex flex-col gap-2">
+                      <div className="flex items-center gap-3">
+                        <div className="w-56 font-mono text-sm">{key}</div>
+
+                        <Input
+                          className="w-32"
+                          disabled={!isEditing}
+                          value={draftValue}
+                          onChange={(e) =>
+                            setDrafts((p) => ({
+                              ...p,
+                              [key]: e.target.value,
+                            }))
+                          }
+                        />
+
+                        <div className="w-20 text-xs text-gray-500">
+                          {TYPE_MAP[param.type] || "UNKNOWN"}
+                        </div>
+
+                        <div className="w-20 text-xs text-gray-500">
+                          IDX: {param.index ?? "—"}
+                        </div>
+                      </div>
+
+                      <div className="text-xs text-gray-500">
+                        {m?.description || "No description available"}
+                      </div>
+                    </Card>
+                  );
+                })}
+              </div>
+            ))
+          : // 📁 NORMAL CATEGORY MODE (UNCHANGED LOGIC)
+            (grouped[activeCategory] || []).map(({ key, param }) => {
+              const isEditing = editing[key];
+              const draftValue = drafts[key] ?? param.value;
+              const m = meta[key];
+
+              return (
+                <Card key={key} className="p-3 flex flex-col gap-2">
+                  <div className="flex items-center gap-3">
+                    <div className="w-56 font-mono text-sm">{key}</div>
+
+                    <Input
+                      className="w-32"
+                      disabled={!isEditing}
+                      value={draftValue}
+                      onChange={(e) =>
+                        setDrafts((p) => ({
+                          ...p,
+                          [key]: e.target.value,
+                        }))
+                      }
+                    />
+
+                    <div className="w-20 text-xs text-gray-500">
+                      {TYPE_MAP[param.type] || "UNKNOWN"}
+                    </div>
+
+                    <div className="w-20 text-xs text-gray-500">
+                      ID: {param.index ?? "—"}
+                    </div>
+
+                    {!isEditing ? (
+                      <Button
+                        variant="outline"
+                        onClick={() => {
+                          setEditing((p) => ({ ...p, [key]: true }));
+                          setDrafts((p) => ({ ...p, [key]: param.value }));
+                        }}
+                      >
+                        Edit
+                      </Button>
+                    ) : (
+                      <>
+                        <Button onClick={() => handleSave(key)}>Save</Button>
+
+                        <Button
+                          variant="ghost"
+                          onClick={() => {
+                            setEditing((p) => ({ ...p, [key]: false }));
+                          }}
+                        >
+                          Cancel
+                        </Button>
+                      </>
+                    )}
+                  </div>
+
+                  {/* <div className="text-xs text-gray-500">
+                    {m?.description || "No description available"}
+                  </div>
+
+                  <div className="text-xs text-muted-foreground">
+                    {m?.unit && `Unit: ${m.unit}`}
+                    {m?.reboot && " • Reboot required"}
+                  </div> */}
+                </Card>
+              );
+            })}
+      </div>
+    </div>
+  );
+}
