@@ -40,6 +40,7 @@
 import express from "express";
 import dotenv from "dotenv";
 import { pool } from "./config/db.js";
+import { connectMongo } from "./config/mongo.js";
 
 import categoryRoutes from "./routes/categoryRoutes.js";
 import productRoutes from "./routes/productRoute.js";
@@ -70,6 +71,7 @@ app.listen(PORT, async () => {
     const result = await pool.query("SELECT NOW()");
     console.log("✅ Database connected");
     console.log(result.rows);
+    await connectMongo();
   } catch (err) {
     console.error("❌ Database connection failed");
     console.error(err);
