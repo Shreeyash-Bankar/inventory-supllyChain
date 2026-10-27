@@ -38,9 +38,13 @@ export async function authenticate(req: Request, res:Response, next:NextFunction
 
             return
         }
+
+        req.user = user
+
+        next()
     }
     catch(error){
         console.error("Error in the authentication", error)
-        next()
+        next(error)
     }
 }
