@@ -7,9 +7,19 @@ export async function signUp (req:Request, res:Response){
 
         const user = await pool.query(
             `
-            SELECT * FROM 
-            `
+            SELECT EXISTS (
+            SELECT 1
+            FROM users
+            WHERE email = $1
+            ) AS "userExists"
+            `, [email]
         )
+
+        if(user.rows[0].userExists) {
+            return res.status(409).json({
+                message: "User already Exists"
+            })
+        }
 
     }catch(error){
         console.error("Error in Registering: ", error)
