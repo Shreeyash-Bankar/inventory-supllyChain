@@ -26,3 +26,27 @@ async function createUserTable() {
 }
 
 createUserTable();
+
+
+const result = await pool.query(`
+    SELECT table_schema, table_name
+    FROM information_schema.tables
+    WHERE table_name = 'users';
+`);
+
+console.log("Users table found:", result.rows);
+
+
+const result2 = await pool.query(`
+    SELECT
+        current_database() AS database,
+        current_schema() AS schema;
+
+    SELECT column_name, data_type
+    FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name = 'users'
+    ORDER BY ordinal_position;
+`);
+
+console.log(result2.rows);
