@@ -1,68 +1,71 @@
 import { Request, Response } from "express";
 import { pool } from "../config/db.js";
+<<<<<<< HEAD
 import bcrypt from 'bcrypt'
 import crypto from 'crypto'
 import { Jwt } from "jsonwebtoken";
 import jwt from 'jsonwebtoken'
+=======
+import bcrypt from "bcrypt";
+import crypto from "crypto";
+>>>>>>> 7ef9279 (rf)
 
-export async function signUp (req:Request, res:Response){
-    try{
-        const {name, email, password} = req.body;
+export async function signUp(req: Request, res: Response) {
+  try {
+    const { name, email, password } = req.body;
 
-        const user = await pool.query(
-            `
+    const user = await pool.query(
+      `
             SELECT EXISTS (
             SELECT 1
             FROM users
             WHERE email = $1
             ) AS "userExists"
-            `, [email]
-        )
+            `,
+      [email],
+    );
 
-        if(user.rows[0].userExists) {
-            return res.status(409).json({
-                message: "User already Exists"
-            })
-        }
-        
-        const passwordHash = await bcrypt.hash(password, 10)
+    if (user.rows[0].userExists) {
+      return res.status(409).json({
+        message: "User already Exists",
+      });
+    }
 
+    const passwordHash = await bcrypt.hash(password, 10);
 
-        const result = await pool.query(
-            `
+    const result = await pool.query(
+      `
             INSERT INTO users (name, email, password_hash)
             VALUES ($1, $2, $3)
             RETURNING *
             `,
-            [name, email, passwordHash]
-        )
+      [name, email, passwordHash],
+    );
 
-        const newUser = result.rows[0]
+    const newUser = result.rows[0];
 
-        const {password_hash , ...safeUser} = newUser
+    const { password_hash, ...safeUser } = newUser;
 
-        console.log(newUser)
-        
-        return res.json({
-            message:"user registered successfully",
-            user: safeUser
-        })
-        
+    console.log(newUser);
 
-    }catch(error){
-        console.error("Error in Registering: ", error)
-    }
+    return res.json({
+      message: "user registered successfully",
+      user: safeUser,
+    });
+  } catch (error) {
+    console.error("Error in Registering: ", error);
+  }
 }
 
-export async function login (req:Request, res:Response){
+export async function login(req: Request, res: Response) {
+  try {
+    const { email, password } = req.body;
 
-    try {
-        const {email, password} = req.body
-
-        const findUser = await pool.query(
-            `
+    const findUser = await pool.query(
+      `
             SELECT * FROM users
             WHERE email = $1
+<<<<<<< HEAD
             `,[email]
         )
         
@@ -146,3 +149,34 @@ export async function login (req:Request, res:Response){
 
 
 //antena selection, radio watage from 25 milliwats to infinite, antena gain, radio frequency , EIRP calculation, RSSAI(optional), SNR --> slider to increase , Radiation Pattern red / green , Diapole Length , Near field and Far field, Reactive RadioActive Zone , numbers of antena placed X distance , and placing drn
+=======
+            `,
+      [email],
+    );
+
+    if (!findUser.rows[0]) {
+      return res.status(404).json({ message: "Ivalid email" });
+    }
+
+    const checkPassword = await bcrypt.compare(
+      password,
+      findUser.rows[0].password_hash,
+    );
+
+    if (checkPassword) {
+        const sessionId = crypto.randomBytes(32).toString('hex')
+
+        const expiresAt = new Date()
+
+        expiresAt.setDate(expiresAt.getDate() + 7)
+
+        await pool.query(
+            `
+            INSERT INTO sessions (id, user_id, expires_at)
+            VALUES ($1, $2, $3)
+            `,[sessionId, findUser.rows[0].id, expiresAt]
+        )
+    }
+  } catch (error) {}
+}
+>>>>>>> 7ef9279 (rf)

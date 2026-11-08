@@ -29,4 +29,5 @@ console.log("🔥 DB FILE LOADED");
 console.log("DATABASE_URL:", process.env.DATABASE_URL ? "FOUND" : "MISSING");
 export const pool = new Pool({
     connectionString: process.env.DATABASE_URL,
+    connectionTimeoutMillis: 10000,
 });
