@@ -1,14 +1,11 @@
 import { Request, Response } from "express";
 import { pool } from "../config/db.js";
-<<<<<<< HEAD
+
 import bcrypt from 'bcrypt'
 import crypto from 'crypto'
 import { Jwt } from "jsonwebtoken";
 import jwt from 'jsonwebtoken'
-=======
-import bcrypt from "bcrypt";
-import crypto from "crypto";
->>>>>>> 7ef9279 (rf)
+
 
 export async function signUp(req: Request, res: Response) {
   try {
@@ -65,7 +62,7 @@ export async function login(req: Request, res: Response) {
       `
             SELECT * FROM users
             WHERE email = $1
-<<<<<<< HEAD
+
             `,[email]
         )
         
@@ -149,34 +146,4 @@ export async function login(req: Request, res: Response) {
 
 
 //antena selection, radio watage from 25 milliwats to infinite, antena gain, radio frequency , EIRP calculation, RSSAI(optional), SNR --> slider to increase , Radiation Pattern red / green , Diapole Length , Near field and Far field, Reactive RadioActive Zone , numbers of antena placed X distance , and placing drn
-=======
-            `,
-      [email],
-    );
 
-    if (!findUser.rows[0]) {
-      return res.status(404).json({ message: "Ivalid email" });
-    }
-
-    const checkPassword = await bcrypt.compare(
-      password,
-      findUser.rows[0].password_hash,
-    );
-
-    if (checkPassword) {
-        const sessionId = crypto.randomBytes(32).toString('hex')
-
-        const expiresAt = new Date()
-
-        expiresAt.setDate(expiresAt.getDate() + 7)
-
-        await pool.query(
-            `
-            INSERT INTO sessions (id, user_id, expires_at)
-            VALUES ($1, $2, $3)
-            `,[sessionId, findUser.rows[0].id, expiresAt]
-        )
-    }
-  } catch (error) {}
-}
->>>>>>> 7ef9279 (rf)
