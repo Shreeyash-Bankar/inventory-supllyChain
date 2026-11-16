@@ -1,11 +1,13 @@
 import { Request, Response } from "express";
 import { pool } from "../config/db.js";
+import { DatabaseError } from "pg";
 
-import bcrypt from 'bcrypt'
-import crypto from 'crypto'
+import bcrypt from "bcrypt";
+import crypto from "crypto";
 import { Jwt } from "jsonwebtoken";
-import jwt from 'jsonwebtoken'
-
+import jwt from "jsonwebtoken";
+import session from "express-session";
+import strict from "assert/strict";
 
 export async function signUp(req: Request, res: Response) {
   try {
@@ -49,8 +51,12 @@ export async function signUp(req: Request, res: Response) {
       message: "user registered successfully",
       user: safeUser,
     });
-  } catch (error) {
+  } catch (error: any) {
+    if (error.code === 23505) {
+      return res.status(409).json({ message: "Email already exists" });
+    }
     console.error("Error in Registering: ", error);
+    return res.status(500).json({ message: "Internal Server Error" });
   }
 }
 
@@ -63,24 +69,24 @@ export async function login(req: Request, res: Response) {
             SELECT * FROM users
             WHERE email = $1
 
-            `,[email]
-        )
-        
-        if(!findUser){
-            return res.status(401).json({message:"Invalid Credentials"})
-        }
-        if(!findUser.rows[0]){
-           return res.status(404).json({message: "Ivalid email"})
-        }
+            `,
+      [email],
+    );
 
-        const checkPassword = await bcrypt.compare(password, findUser.rows[0].password_hash)
+    if (!findUser.rows[0]) {
+      return res.status(401).json({ message: "Invalid Credentials" });
+    }
 
-        if(!checkPassword){
-            return res.status(409).json({message:"Incorrect Password"})
-            
-        }
+    const checkPassword = await bcrypt.compare(
+      password,
+      findUser.rows[0].password_hash,
+    );
 
-        /*
+    if (!checkPassword) {
+      return res.status(409).json({ message: "Incorrect Password" });
+    }
+
+    /*
         Alternate way using the JWT
         
 
@@ -107,43 +113,73 @@ export async function login(req: Request, res: Response) {
 
         */
 
-      
+    const sessionId = crypto.randomBytes(32).toString("hex");
 
-        const sessionId = crypto.randomBytes(32).toString('hex')
+    const expireAt = new Date();
 
-        const expireAt = new Date()
-
-        expireAt.setDate(expireAt.getDate() + 7)
-        await pool.query(
-            `
+    expireAt.setDate(expireAt.getDate() + 7);
+    await pool.query(
+      `
             INSERT INTO sessions(sessionId , sessionData, expires)
             VALUES ($1, $2, $3)
-            `,[sessionId, JSON.stringify({userId: findUser.rows[0].id , role: findUser.rows[0].role}), expireAt]
-        )
+            `,
+      [
+        sessionId,
+        JSON.stringify({
+          userId: findUser.rows[0].id,
+          role: findUser.rows[0].role,
+        }),
+        expireAt,
+      ],
+    );
 
-        res.cookie('sessionId', sessionId, {
-            httpOnly: true,
-            secure: process.env.NODE_ENV === 'production',
-            sameSite: 'strict',
-            expires: expireAt
-        })
+    res.cookie("sessionId", sessionId, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "strict",
+      expires: expireAt,
+    });
 
-        const {password_hash, ...safeUser} = findUser.rows[0]
+    const { password_hash, ...safeUser } = findUser.rows[0];
 
-        return res.json({
-            message:"Login Succesfull",
-            user: safeUser
-        })
+    return res.json({
+      message: "Login Succesfull",
+      user: safeUser,
+    });
+  } catch (error) {
+    console.error("Error Logging User : ", error);
 
-    } catch (error) {
-        res.json({
-            message:"Error Logging User",
-            uiMessage: "We are working on the problem , please try after some time"
-        })
-        console.error("Error Logging User : ", error)
-    }
+    return res.json({
+      message: "Error Logging User",
+      uiMessage: "We are working on the problem , please try after some time",
+    });
+  }
 }
 
+export async function logout(req: Request, res: Response) {
+  try {
+    const sessionId = req.cookies.sessionId;
 
-//antena selection, radio watage from 25 milliwats to infinite, antena gain, radio frequency , EIRP calculation, RSSAI(optional), SNR --> slider to increase , Radiation Pattern red / green , Diapole Length , Near field and Far field, Reactive RadioActive Zone , numbers of antena placed X distance , and placing drn
+    if (sessionId) {
+      await pool.query(
+        `
+        DELETE FROM sessions 
+        WHERE sessionId = $1
+        `,
+        [sessionId],
+      );
+    }
 
+    res.clearCookie("sessionId", {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "development",
+      sameSite: "strict",
+      path: "/",
+    });
+
+    return res.status(200).json({ message: "Logout successful" });
+  } catch (error) {
+    console.error("Logout Error :", error);
+    return res.status(500).json({ message: "Internal server Error" });
+  }
+}
