@@ -78,7 +78,7 @@ app.use("/supplier", supplierRoutes);
 
 const PORT = process.env.PORT || 5000;
 
-await connectRedis();
+// await connectRedis();
 
 app.listen(PORT, async () => {
   console.log(`Server running on port ${PORT}`);
@@ -87,7 +87,7 @@ app.listen(PORT, async () => {
     const result = await pool.query("SELECT NOW()");
     console.log("✅ Database connected");
     console.log(result.rows);
-    await connectMongo();
+    // await connectMongo();
   } catch (err) {
     console.error("❌ Database connection failed");
     console.error(err);

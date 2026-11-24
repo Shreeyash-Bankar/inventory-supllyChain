@@ -3,16 +3,41 @@ import React from "react";
 import { useState } from "react";
 import { toast } from "react-toastify";
 import { Eye, EyeOff } from "lucide-react";
+import { useAuth } from "../store/AuthContext";
+
+interface user {
+  _id: number;
+  name: string;
+  email: string;
+  role: string;
+  isActive: string;
+  created_at: string;
+  updated_at: string;
+}
+interface loginResponse {
+  message: string;
+  user: user;
+}
+
 const Login = () => {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
 
+  const { setAuthUser } = useAuth();
+
   const handlebtnLogin = async () => {
-    const response = await axios.post("http://localhost:5000/auth/login", {
-      email: email,
-      password: password,
-    });
+    const response = await axios.post<loginResponse>(
+      "http://localhost:5000/auth/login",
+      {
+        email: email,
+        password: password,
+      },
+    );
+
+    const user = response.data.user;
+
+    setAuthUser(user);
   };
 
   return (

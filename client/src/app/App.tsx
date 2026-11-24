@@ -10,15 +10,18 @@ import CategoryForm from "../features/categories/components/CategoryForm";
 import CategoryTable from "../features/categories/components/CategoryTable";
 import Login from "../pages/Login.js";
 import Signup from "../pages/Signup.js";
+import { AuthProvider } from "../store/AuthContext.js";
 function App() {
   return (
-    <BrowserRouter>
-      <Routes>
-        <Route path="/login" element={<Login />}></Route>
-        <Route path="/" element={<Signup />}></Route>
-      </Routes>
-      <ToastContainer />
-    </BrowserRouter>
+    <AuthProvider>
+      <BrowserRouter>
+        <Routes>
+          <Route path="/login" element={<Login />}></Route>
+          <Route path="/" element={<Signup />}></Route>
+        </Routes>
+        <ToastContainer />
+      </BrowserRouter>
+    </AuthProvider>
   );
 }
 
