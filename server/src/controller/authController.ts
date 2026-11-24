@@ -8,6 +8,8 @@ import { Jwt } from "jsonwebtoken";
 import jwt from "jsonwebtoken";
 import session from "express-session";
 import strict from "assert/strict";
+import { generateResetToken } from "../utils/token.js";
+import { sendResetEmail } from "../services/email.service.js";
 
 export async function signUp(req: Request, res: Response) {
   try {
@@ -181,5 +183,47 @@ export async function logout(req: Request, res: Response) {
   } catch (error) {
     console.error("Logout Error :", error);
     return res.status(500).json({ message: "Internal server Error" });
+  }
+}
+
+export async function forgotPassword(req: Request, res: Response) {
+  try {
+    const { email } = req.body;
+
+    const user = await pool.query(
+      `
+    SELECT id, name, email , role, is_active FROM users
+    WHERE email = $1
+    `,
+      [email],
+    );
+
+    if (user.rows.length === 0) {
+      return res.status(200).json({
+        message: "If the account exist, a password reset link will be send",
+      });
+    }
+
+    const { resetToken, hashedToken } = generateResetToken();
+
+    const expireAt = new Date(Date.now() + 15 * 60 * 1000);
+
+    await pool.query(
+      `UPDATE users
+    SET reset_password_token = $1, reset_password_expires = $2
+    WHERE id = $3`,
+      [hashedToken, expireAt, user.rows[0].id],
+    );
+
+    await sendResetEmail(email, resetToken);
+
+    return res
+      .status(200)
+      .json({ message: "If the account exist , a reset link will be send." });
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({
+      message: "Something went wrong",
+    });
   }
 }

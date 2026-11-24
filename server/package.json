@@ -29,6 +29,7 @@
     "jsonwebtoken": "^9.0.3",
     "mongoose": "^9.11.2",
     "node-cron": "^4.6.0",
+    "nodemailer": "^10.6.1",
     "pg": "^8.23.1",
     "redis": "^6.3.1"
   },
@@ -38,7 +39,8 @@
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
     "@types/express-session": "^1.19.0",
-    "@types/node": "^26.1.0",
+    "@types/node": "^26.6.6",
+    "@types/nodemailer": "^8.0.2",
     "@types/pg": "^8.20.0",
     "node-pg-migrate": "^9.0.0",
     "nodemon": "^3.1.14",
