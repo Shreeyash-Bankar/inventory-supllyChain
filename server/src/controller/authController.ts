@@ -227,3 +227,40 @@ export async function forgotPassword(req: Request, res: Response) {
     });
   }
 }
+
+export async function resetPassword(req: Request, res: Response) {
+  const { password } = req.body;
+  const { resetToken } = req.params;
+
+  if (!password) {
+    return res.status(400).json({ message: "Password cannot be empty" });
+  }
+
+  const hashPassword = await bcrypt.hash(password, 12);
+
+  if (typeof resetToken !== "string") {
+    return res.status(400).json({ message: "Invalid reset token" });
+  }
+
+  const hashResetToken = crypto
+    .createHash("sha256")
+    .update(resetToken)
+    .digest("hex");
+
+  const databaseToken = await pool.query(
+    `
+    UPDATE users
+    SET 
+    password = $1,
+    reset_password_token = NULL,
+    reset_password_expires = NULL
+    WHERE reset_password_token = $2 AND reset_password_expires > NOW();`,
+    [hashPassword, hashResetToken],
+  );
+
+  if (databaseToken.rows.length === 0) {
+    return res.status(400).json({ message: "Invalid or expired reset token" });
+  }
+
+  return res.status(200).json({ message: "Password reset successfully" });
+}

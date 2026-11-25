@@ -10,6 +10,8 @@ import authRoutes from "./routes/authRoutes.js";
 import cors from "cors";
 import session from "express-session";
 import { connectRedis } from "./config/redis.js";
+import swaggerUi from "swagger-ui-express";
+import swaggerSpec from "./config/swagger.js";
 
 dotenv.config();
 
@@ -17,6 +19,10 @@ const app = express();
 
 app.use(cors());
 app.use(express.json());
+
+// Swagger documentation
+app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
+
 app.use(
   session({
     name: "sid",
