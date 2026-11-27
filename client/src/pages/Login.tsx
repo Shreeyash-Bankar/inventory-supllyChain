@@ -59,17 +59,22 @@ const Login = () => {
           </div>
           <div>
             <input
-              type="password"
+              type={showPassword ? "text" : "password"}
               value={password}
               onChange={(e) => setPassword(e.target.value)}
             />
-            <button onClick={() => setShowPassword(!showPassword)}>
+            <button
+              type="button"
+              onClick={() => setShowPassword(!showPassword)}
+            >
               {showPassword ? <Eye /> : <EyeOff />}
             </button>
             <span></span>
           </div>
           <div>
-            <button>Login</button>
+            <button type="button" onClick={handlebtnLogin}>
+              Login
+            </button>
           </div>
         </form>
       </div>
