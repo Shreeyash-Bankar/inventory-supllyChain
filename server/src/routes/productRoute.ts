@@ -5,14 +5,17 @@ import {
   updateProduct,
   deleteProduct,
 } from "../controller/productController.js";
+import upload from "../middleware/upload.js";
 const router = express.Router();
 
 router.get("/", getProducts);
 
-router.post("/", createProduct);
+router.post("/", upload.single("image"), createProduct);
 
-router.patch("/:id", updateProduct);
+// router.patch("/:id", updateProduct);
 
 router.delete("/:id", deleteProduct);
 
-export default router
+router.put("/:id", upload.single("image"), updateProduct);
+
+export default router;
